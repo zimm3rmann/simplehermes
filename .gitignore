@@ -1,0 +1,21 @@
+# Build outputs
+/dist/
+/build/
+/simplehermes
+/simplehermes.exe
+
+# Local reference material
+/source_repos/
+/aidocs/
+
+# Wails
+/.wails/
+
+# Go
+*.test
+*.out
+coverage.out
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

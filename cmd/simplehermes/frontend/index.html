@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SimpleHermes</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <nav class="skip-links" aria-label="Skip links">
+      <a class="skip-link" href="#console-panel">Skip to operating controls</a>
+      <a class="skip-link" href="#connection-panel">Skip to connection</a>
+      <a class="skip-link" href="#open-settings">Skip to settings</a>
+    </nav>
+
+    <main id="main" class="shell">
+      <header class="appbar" aria-labelledby="app-title">
+        <div class="brand-block">
+          <p class="app-label">SimpleHermes</p>
+          <h1 id="app-title">Station Control</h1>
+        </div>
+        <div class="appbar-side">
+          <dl class="system-strip" aria-label="Application status">
+            <div>
+              <dt>Mode</dt>
+              <dd id="app-mode">Loading</dd>
+            </div>
+            <div>
+              <dt>Remote</dt>
+              <dd id="app-remote">Waiting</dd>
+            </div>
+            <div>
+              <dt>Device</dt>
+              <dd id="app-device">No radio selected</dd>
+            </div>
+            <div>
+              <dt>Link</dt>
+              <dd id="app-transport">Waiting</dd>
+            </div>
+          </dl>
+          <button id="open-settings" type="button" class="appbar-button" aria-keyshortcuts="S" aria-haspopup="dialog" aria-controls="settings-modal" aria-expanded="false" title="Open settings (S)">Settings</button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <section id="console-panel" class="panel console-panel" aria-labelledby="console-title">
+          <div class="panel-header">
+            <p class="panel-kicker">Live Radio</p>
+            <h2 id="console-title">Primary Operating Controls</h2>
+          </div>
+
+          <div class="connection-row">
+            <p id="connection-state" class="status-pill">Disconnected</p>
+            <p id="station-status" class="status-text">Loading state…</p>
+            <output id="live-status" class="live-status" role="status" aria-live="polite" aria-atomic="true">Ready.</output>
+          </div>
+
+          <section class="freq-display" aria-labelledby="freq-title">
+            <p class="display-label" id="freq-title">Current Frequency</p>
+            <div class="freq-readout">
+              <output id="current-frequency" class="freq-value">--.------</output>
+              <span class="freq-unit">MHz</span>
+            </div>
+            <div class="freq-meta">
+              <div class="meta-block">
+                <span class="meta-label">Band</span>
+                <strong id="current-band">--</strong>
+              </div>
+              <div class="meta-block">
+                <span class="meta-label">Mode</span>
+                <strong id="current-mode">--</strong>
+              </div>
+              <div class="meta-block">
+                <span class="meta-label">Step</span>
+                <strong id="current-step">--</strong>
+              </div>
+              <div class="meta-block">
+                <span class="meta-label">Power</span>
+                <strong id="current-power">--</strong>
+              </div>
+              <div class="meta-block">
+                <span class="meta-label">State</span>
+                <strong id="current-radio-state">Idle</strong>
+              </div>
+            </div>
+          </section>
+
+          <div class="quick-grid">
+            <section class="control-section compact-section" aria-labelledby="band-bank-title">
+              <div class="section-heading compact-heading">
+                <h3 id="band-bank-title">Bands</h3>
+                <p class="section-note">Tab in, arrows inside, or press B</p>
+              </div>
+              <div id="band-buttons" class="band-buttons" role="radiogroup" aria-label="Band presets"></div>
+            </section>
+
+            <section class="control-section compact-section" aria-labelledby="mode-bank-title">
+              <div class="section-heading compact-heading">
+                <h3 id="mode-bank-title">Modes</h3>
+                <p class="section-note">Tab in, arrows inside, or press M</p>
+              </div>
+              <div id="mode-buttons" class="mode-buttons" role="radiogroup" aria-label="Operating modes"></div>
+            </section>
+          </div>
+
+          <div class="control-deck">
+            <section class="control-section dense-section tune-panel" aria-labelledby="tuning-title">
+              <div class="section-heading compact-heading">
+                <h3 id="tuning-title">Tuning and Output</h3>
+                <p class="section-note">Enter MHz, use arrows or wheel, then apply</p>
+              </div>
+
+              <form id="radio-form" class="control-form">
+                <div class="form-grid tune-grid">
+                  <label class="field">
+                    <span>Frequency in MHz</span>
+                    <input id="frequency-input" name="frequency" inputmode="decimal" autocomplete="off">
+                  </label>
+
+                  <label class="field">
+                    <span>Tune step</span>
+                    <select id="step-select" name="step">
+                      <option value="10">10 Hz</option>
+                      <option value="50">50 Hz</option>
+                      <option value="100">100 Hz</option>
+                      <option value="500">500 Hz</option>
+                      <option value="1000">1 kHz</option>
+                      <option value="2500">2.5 kHz</option>
+                      <option value="5000">5 kHz</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span>Power preset</span>
+                    <select id="power-select" name="power"></select>
+                  </label>
+                </div>
+
+                <div class="action-row">
+                  <div class="nudge-group" aria-label="Frequency nudge controls">
+                    <button type="button" data-nudge="-10">Down 10</button>
+                    <button type="button" data-nudge="-1">Down 1</button>
+                    <button type="button" data-nudge="1">Up 1</button>
+                    <button type="button" data-nudge="10">Up 10</button>
+                  </div>
+
+                  <button id="apply-frequency" type="submit">Apply</button>
+                </div>
+              </form>
+            </section>
+
+            <section class="control-section dense-section operate-panel" aria-labelledby="operate-title">
+              <div class="section-heading compact-heading">
+                <h3 id="operate-title">Operate</h3>
+                <p class="section-note">R, T, click PTT, or hold Space</p>
+              </div>
+              <div class="toggle-grid" aria-label="Receive and transmit controls">
+                <button id="rx-toggle" type="button" class="toggle" aria-keyshortcuts="R">Receive</button>
+                <button id="tx-toggle" type="button" class="toggle" aria-keyshortcuts="T">Transmit armed</button>
+                <button id="ptt-toggle" type="button" class="toggle toggle-alert" aria-keyshortcuts="Space">PTT</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <aside class="sidebar">
+          <section id="connection-panel" class="panel" aria-labelledby="station-title">
+            <div class="panel-header">
+              <p class="panel-kicker">Connection</p>
+              <h2 id="station-title">Radio Discovery</h2>
+            </div>
+            <p id="hardware-summary" class="status-text">Loading hardware summary…</p>
+            <div class="button-row">
+              <button id="discover-button" type="button">Discover radios</button>
+              <button id="disconnect-button" type="button" class="ghost">Disconnect</button>
+            </div>
+            <div id="device-list" class="device-list" role="list" aria-label="Discovered radios"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="shortcuts-title">
+            <div class="panel-header">
+              <p class="panel-kicker">Keyboard</p>
+              <h2 id="shortcuts-title">Shortcut Reference</h2>
+            </div>
+            <ul id="shortcuts" class="shortcut-list"></ul>
+          </section>
+        </aside>
+      </div>
+    </main>
+
+    <div id="settings-modal" class="settings-modal" hidden>
+      <div class="settings-dialog-backdrop" data-close-settings="true"></div>
+      <section id="settings-panel" class="settings-dialog panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+        <div class="settings-dialog-header">
+          <div class="panel-header">
+            <p class="panel-kicker">Settings</p>
+            <h2 id="settings-title">Mode and Accessibility</h2>
+          </div>
+          <button id="close-settings" type="button" class="ghost" aria-label="Close settings">Close</button>
+        </div>
+
+        <form id="settings-form" class="control-form compact-form">
+          <div class="settings-grid">
+            <label class="field">
+              <span>Mode</span>
+              <select id="settings-mode" name="mode">
+                <option value="local">Local</option>
+                <option value="server">Server</option>
+                <option value="client">Client</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Server listen address</span>
+              <input id="settings-listen" name="listenAddress" autocomplete="off">
+            </label>
+
+            <label class="field settings-span">
+              <span>Remote server URL</span>
+              <input id="settings-remote" name="remoteBaseUrl" autocomplete="off">
+            </label>
+
+            <label class="checkbox-field settings-span">
+              <input id="settings-accessibility" name="accessibilityMode" type="checkbox">
+              <span>Accessibility mode with spoken and live status announcements</span>
+            </label>
+
+            <div class="button-row settings-span">
+              <button type="submit">Save settings</button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
