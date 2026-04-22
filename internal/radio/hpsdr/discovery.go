@@ -7,7 +7,6 @@ import (
 	"net"
 	"sort"
 	"strconv"
-	"syscall"
 	"time"
 
 	"simplehermes/internal/radio"
@@ -169,7 +168,7 @@ func enableBroadcast(conn *net.UDPConn) error {
 
 	var controlErr error
 	if err := raw.Control(func(fd uintptr) {
-		controlErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
+		controlErr = setSocketBroadcast(fd)
 	}); err != nil {
 		return err
 	}
