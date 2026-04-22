@@ -38,7 +38,7 @@ func NewLocalService(version string, cfg config.Config, configPath string, drive
 		messages: []Message{
 			{
 				Level: "info",
-				Text:  "Desktop shell is now the primary target. Hermes discovery is implemented; the low-level command and audio packet engine is the next milestone.",
+				Text:  "Desktop shell is the primary target. Hermes discovery, protocol 1 transport, and basic RX/TX audio streaming are implemented; real station validation is the next milestone.",
 			},
 		},
 	}

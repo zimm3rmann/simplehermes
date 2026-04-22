@@ -63,5 +63,7 @@ type Session interface {
 	SetRXEnabled(ctx context.Context, enabled bool) error
 	SetTXEnabled(ctx context.Context, enabled bool) error
 	SetPTT(ctx context.Context, enabled bool) error
+	SubscribeRXAudio(ctx context.Context) (<-chan []float32, error)
+	WriteTXAudio(ctx context.Context, samples []float32) error
 	Close() error
 }

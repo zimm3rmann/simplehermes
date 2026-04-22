@@ -1,5 +1,9 @@
 # SimpleHermes
 
+> [!WARNING]
+> SimpleHermes is in active development and is currently a non-functional pre-alpha.
+> Do not rely on it for real station operation yet, and expect breaking changes while the radio, audio, and validation work is still in progress.
+
 SimpleHermes is a focused desktop control app for the Hermes Lite 2 SDR.
 
 The project is deliberately narrow: one radio target, three operating modes, accessible keyboard-first control, and no waterfall or oversized DSP feature surface. The goal is a dependable control panel that works well for blind operators and still stays practical for anyone who wants a clean station interface.
@@ -20,28 +24,35 @@ Implemented today:
 - Wails desktop shell for Windows and Linux
 - Persistent application settings
 - HPSDR protocol discovery for Hermes devices on the local network
+- Hermes protocol 1 session transport for Hermes Lite 2 class devices
+- Basic backend DSP with RX audio playback and TX microphone capture paths
 - Local-mode and server-mode radio state management
 - Client-mode proxying to a remote SimpleHermes server
+- Audio WebSocket transport for local and remote control paths
 - Keyboard shortcuts for common operating actions
 
 Not finished yet:
 
-- Low-level Hermes Lite 2 command/streaming engine
-- Receive audio path
-- Transmit audio path
+- Protocol 2 / alternate transport support
 - Real on-air validation with a complete station workflow
 
 ## Keyboard Shortcuts
 
 - `P`: cycle power presets
 - `B`: cycle band presets
+- `Shift + B`: read the current band
+- `Shift + F`: read the current frequency
 - `M`: cycle operating modes
+- `Wheel`: tune up or down by the current step
+- `Arrow Up` / `Arrow Down`: tune by one current step
 - `]`: tune up one step
 - `[`: tune down one step
 - `Shift + ]`: tune up ten steps
 - `Shift + [`: tune down ten steps
 - `R`: toggle receive
 - `T`: toggle transmit arm
+- `S`: open settings
+- `H`: read the shortcut list
 - `Hold Space`: key PTT while held
 
 Accessibility mode can announce state changes through the desktop screen reader stack.
@@ -114,3 +125,13 @@ GitHub Actions is configured to test and build Linux and Windows artifacts.
 ## Design Intent
 
 SimpleHermes is not trying to compete with large SDR suites. The target is a compact, predictable operating surface with strong keyboard support and clear spoken feedback when accessibility mode is enabled.
+
+## Credits
+
+SimpleHermes is being developed with protocol, behavior, and workflow reference material from these open-source projects:
+
+- [Thetis](https://github.com/TAPR/OpenHPSDR-Thetis)
+- [piHPSDR](https://github.com/g0orx/pihpsdr)
+- [LinHPSDR](https://github.com/pa3gsb/linhpsdr)
+
+These projects are being used as development references for interoperability and feature scoping. SimpleHermes is a separate codebase with a much narrower product target.

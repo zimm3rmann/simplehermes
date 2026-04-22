@@ -10,6 +10,16 @@ const state = {
   wheelDeltaAccumulator: 0,
   wheelFlushTimer: null,
   audioContext: null,
+  rxSocket: null,
+  rxNode: null,
+  rxBuffers: [],
+  rxBufferOffset: 0,
+  txSocket: null,
+  txNode: null,
+  txMonitor: null,
+  micStream: null,
+  micSource: null,
+  lastMicError: "",
   settingsOpen: false,
   lastFocusedElement: null,
   delayedAnnouncementTimer: null,
@@ -183,6 +193,7 @@ function bindActions() {
       releaseSpacePTT();
     }
   });
+  window.addEventListener("beforeunload", shutdownAudio);
 }
 
 async function refreshState() {
@@ -239,6 +250,7 @@ function applyState(nextState) {
   renderRadio(nextState.radio, nextState.bands, nextState.modes, nextState.powerLevels);
   renderSettings(nextState.settings);
   renderShortcuts(nextState.shortcuts);
+  syncAudioState(nextState.radio);
 }
 
 function renderApp(app, radioState) {
@@ -337,7 +349,7 @@ function renderBandButtons(bands, activeBandId) {
     onActivate: (band, focusAfterRender) => {
       sendCommand(
         { type: "setBand", bandId: band.id },
-        (nextState) => bandAnnouncement(nextState.radio),
+        null,
         focusAfterRender ? { group: "band", value: band.id } : null
       );
     },
@@ -528,11 +540,22 @@ function handleKeydown(event) {
       break;
     case "b":
       event.preventDefault();
+      if (event.shiftKey) {
+        announce(currentBandAnnouncement(state.current.radio));
+        break;
+      }
       sendCommand(
         { type: "cycleBand" },
-        (nextState) => bandAnnouncement(nextState.radio),
+        null,
         shouldPreserveGroupFocus(event.target, "band") ? { group: "band", value: nextBandRecord().id } : null
       );
+      break;
+    case "f":
+      if (!event.shiftKey) {
+        break;
+      }
+      event.preventDefault();
+      announce(frequencyAnnouncement(state.current.radio));
       break;
     case "m":
       event.preventDefault();
@@ -611,17 +634,31 @@ function handleSettingsKeydown(event) {
     return;
   }
 
+  if (event.key === "Tab") {
+    trapSettingsFocus(event);
+    return;
+  }
+
+  if (isEditableTarget(event.target)) {
+    return;
+  }
+
   if (event.key.toLowerCase() === "h") {
     event.preventDefault();
     announce(shortcutsAnnouncement());
     return;
   }
 
-  if (event.key !== "Tab") {
+  if (event.key.toLowerCase() === "b" && event.shiftKey) {
+    event.preventDefault();
+    announce(currentBandAnnouncement(state.current.radio));
     return;
   }
 
-  trapSettingsFocus(event);
+  if (event.key.toLowerCase() === "f" && event.shiftKey) {
+    event.preventDefault();
+    announce(frequencyAnnouncement(state.current.radio));
+  }
 }
 
 function openSettings() {
@@ -798,12 +835,12 @@ function radioStateSummary(radioState) {
   return parts.join(" / ");
 }
 
-function bandAnnouncement(radioState) {
-  return `${spokenBandLabel(radioState.bandLabel)}, ${formatFrequencyForAnnouncement(radioState.frequencyMHz)} megahertz.`;
-}
-
 function frequencyAnnouncement(radioState) {
   return `Frequency ${formatFrequencyForAnnouncement(radioState.frequencyMHz)} megahertz.`;
+}
+
+function currentBandAnnouncement(radioState) {
+  return `Current band, ${spokenBandLabel(radioState.bandLabel)}.`;
 }
 
 function deferredFrequencyAnnouncement(radioState) {
@@ -830,12 +867,20 @@ function spokenShortcutKeys(keys) {
   return keys
     .replace(/Shift \+ \[/g, "Shift plus left bracket")
     .replace(/Shift \+ \]/g, "Shift plus right bracket")
+    .replace(/Shift \+ Arrow Up/g, "Shift plus arrow up")
+    .replace(/Shift \+ Arrow Down/g, "Shift plus arrow down")
+    .replace(/Shift \+ B/g, "Shift plus B")
+    .replace(/Shift \+ F/g, "Shift plus F")
     .replace(/\[/g, "left bracket")
     .replace(/\]/g, "right bracket")
     .replace(/Arrow Up/g, "arrow up")
     .replace(/Arrow Down/g, "arrow down")
     .replace(/Hold Space/g, "hold space")
     .replace(/Wheel/g, "mouse wheel");
+}
+
+function spokenBandLabel(label) {
+  return label.replace(/\bm$/i, "meters");
 }
 
 function formatFrequencyForAnnouncement(frequencyMHz) {
@@ -857,15 +902,229 @@ function formatFrequencyForAnnouncement(frequencyMHz) {
   return `${integerPart}.${fractionalPart.slice(0, precision)}`;
 }
 
-function spokenBandLabel(label) {
-  return label.replace(/\bm$/i, "meters");
-}
-
 function formatStep(stepHz) {
   if (stepHz >= 1000) {
     return `${(stepHz / 1000).toFixed(stepHz % 1000 === 0 ? 0 : 1)} kHz`;
   }
   return `${stepHz} Hz`;
+}
+
+function syncAudioState(radioState) {
+  const shouldReceive = Boolean(radioState.connected && radioState.rxEnabled && radioState.capabilities.rxAudioReady);
+  if (shouldReceive) {
+    ensureRXAudio();
+  } else {
+    stopRXAudio();
+  }
+
+  const shouldCapture = Boolean(radioState.connected && radioState.txEnabled && radioState.capabilities.txAudioReady);
+  if (shouldCapture) {
+    ensureTXAudio();
+  } else {
+    stopTXAudio();
+  }
+}
+
+function ensureRXAudio() {
+  if (state.rxSocket && (state.rxSocket.readyState === WebSocket.OPEN || state.rxSocket.readyState === WebSocket.CONNECTING)) {
+    ensureRXPlayback();
+    return;
+  }
+
+  const socket = new WebSocket(websocketURL("/api/audio/rx"));
+  socket.binaryType = "arraybuffer";
+  socket.addEventListener("open", () => {
+    ensureRXPlayback();
+    resumeAudioContext();
+  });
+  socket.addEventListener("message", (event) => {
+    if (!(event.data instanceof ArrayBuffer)) return;
+    state.rxBuffers.push(new Float32Array(event.data));
+  });
+  socket.addEventListener("close", () => {
+    if (state.rxSocket === socket) {
+      state.rxSocket = null;
+      clearRXBuffers();
+    }
+  });
+  socket.addEventListener("error", () => {
+    if (state.rxSocket === socket) {
+      state.rxSocket = null;
+    }
+  });
+
+  state.rxSocket = socket;
+}
+
+function ensureRXPlayback() {
+  if (state.rxNode) return;
+
+  const audioContext = ensureAudioContext();
+  if (!audioContext) return;
+
+  const processor = audioContext.createScriptProcessor(1024, 0, 2);
+  processor.onaudioprocess = (event) => {
+    const left = event.outputBuffer.getChannelData(0);
+    const right = event.outputBuffer.getChannelData(1);
+    fillOutputBuffer(left);
+    right.set(left);
+  };
+  processor.connect(audioContext.destination);
+  state.rxNode = processor;
+}
+
+function fillOutputBuffer(target) {
+  let written = 0;
+
+  while (written < target.length) {
+    const current = state.rxBuffers[0];
+    if (!current) {
+      target.fill(0, written);
+      return;
+    }
+
+    const available = current.length - state.rxBufferOffset;
+    const count = Math.min(available, target.length - written);
+    target.set(current.subarray(state.rxBufferOffset, state.rxBufferOffset + count), written);
+
+    written += count;
+    state.rxBufferOffset += count;
+    if (state.rxBufferOffset >= current.length) {
+      state.rxBuffers.shift();
+      state.rxBufferOffset = 0;
+    }
+  }
+}
+
+async function ensureTXAudio() {
+  if (state.txSocket && (state.txSocket.readyState === WebSocket.OPEN || state.txSocket.readyState === WebSocket.CONNECTING) && state.txNode) {
+    return;
+  }
+
+  const audioContext = ensureAudioContext();
+  if (!audioContext || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    return;
+  }
+
+  if (!state.txSocket || state.txSocket.readyState > WebSocket.OPEN) {
+    const socket = new WebSocket(websocketURL("/api/audio/tx"));
+    socket.binaryType = "arraybuffer";
+    socket.addEventListener("close", () => {
+      if (state.txSocket === socket) {
+        state.txSocket = null;
+      }
+    });
+    socket.addEventListener("error", () => {
+      if (state.txSocket === socket) {
+        state.txSocket = null;
+      }
+    });
+    state.txSocket = socket;
+  }
+
+  if (state.micStream && state.txNode) {
+    resumeAudioContext();
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+
+    const source = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(1024, 1, 1);
+    const silentMonitor = audioContext.createGain();
+    silentMonitor.gain.value = 0;
+
+    processor.onaudioprocess = (event) => {
+      const radioState = state.current?.radio;
+      if (!radioState || !radioState.ptt) return;
+      if (!state.txSocket || state.txSocket.readyState !== WebSocket.OPEN) return;
+
+      const input = event.inputBuffer.getChannelData(0);
+      state.txSocket.send(floatsToArrayBuffer(input));
+    };
+
+    source.connect(processor);
+    processor.connect(silentMonitor);
+    silentMonitor.connect(audioContext.destination);
+
+    state.micStream = stream;
+    state.micSource = source;
+    state.txNode = processor;
+    state.txMonitor = silentMonitor;
+    state.lastMicError = "";
+    resumeAudioContext();
+  } catch (error) {
+    const message = error && error.message ? error.message : "Microphone access failed.";
+    if (state.lastMicError !== message) {
+      state.lastMicError = message;
+      announce(`Microphone unavailable. ${message}`);
+    }
+  }
+}
+
+function stopRXAudio() {
+  if (state.rxSocket) {
+    state.rxSocket.close();
+    state.rxSocket = null;
+  }
+  if (state.rxNode) {
+    state.rxNode.disconnect();
+    state.rxNode = null;
+  }
+  clearRXBuffers();
+}
+
+function stopTXAudio() {
+  if (state.txSocket) {
+    state.txSocket.close();
+    state.txSocket = null;
+  }
+  if (state.txNode) {
+    state.txNode.disconnect();
+    state.txNode = null;
+  }
+  if (state.txMonitor) {
+    state.txMonitor.disconnect();
+    state.txMonitor = null;
+  }
+  if (state.micSource) {
+    state.micSource.disconnect();
+    state.micSource = null;
+  }
+  if (state.micStream) {
+    state.micStream.getTracks().forEach((track) => track.stop());
+    state.micStream = null;
+  }
+}
+
+function shutdownAudio() {
+  stopRXAudio();
+  stopTXAudio();
+}
+
+function clearRXBuffers() {
+  state.rxBuffers = [];
+  state.rxBufferOffset = 0;
+}
+
+function websocketURL(path) {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${path}`;
+}
+
+function floatsToArrayBuffer(input) {
+  const buffer = new ArrayBuffer(input.length * 4);
+  const view = new Float32Array(buffer);
+  view.set(input);
+  return buffer;
 }
 
 function announce(text) {
@@ -1016,8 +1275,21 @@ function ensureAudioContext() {
     return null;
   }
 
-  state.audioContext = new AudioContextCtor();
+  try {
+    state.audioContext = new AudioContextCtor({ sampleRate: 48000 });
+  } catch (error) {
+    state.audioContext = new AudioContextCtor();
+  }
   return state.audioContext;
+}
+
+function resumeAudioContext() {
+  const audioContext = ensureAudioContext();
+  if (!audioContext || audioContext.state !== "suspended") return;
+
+  audioContext.resume().catch((error) => {
+    console.error("audio resume failed", error);
+  });
 }
 
 function scheduleTone(audioContext, tone, startTime) {

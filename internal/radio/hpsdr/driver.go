@@ -18,9 +18,13 @@ func (d *Driver) Discover(ctx context.Context) ([]radio.Device, error) {
 	return discover(ctx)
 }
 
-func (d *Driver) Connect(_ context.Context, device radio.Device, options radio.SessionOptions) (radio.Session, error) {
+func (d *Driver) Connect(ctx context.Context, device radio.Device, options radio.SessionOptions) (radio.Session, error) {
+	if device.Protocol == "protocol1" {
+		return newProtocol1Session(ctx, device, options)
+	}
+
 	snapshot := radio.Snapshot{
-		Connected:    true,
+		Connected:    false,
 		Device:       &device,
 		BandID:       options.BandID,
 		ModeID:       options.ModeID,
@@ -30,14 +34,14 @@ func (d *Driver) Connect(_ context.Context, device radio.Device, options radio.S
 		RXEnabled:    options.RXEnabled,
 		TXEnabled:    options.TXEnabled,
 		PTT:          false,
-		LastAction:   "Session opened",
-		Status:       fmt.Sprintf("Connected to %s at %s. Discovery is live; command transport is staged for later integration.", device.Model, device.Address),
+		LastAction:   "Connect rejected",
+		Status:       fmt.Sprintf("Discovery found %s at %s, but protocol %s is not implemented yet.", device.Model, device.Address, device.Protocol),
 		Capabilities: radio.Capabilities{
 			DiscoveryReady: true,
 			HardwareReady:  false,
 			RXAudioReady:   false,
 			TXAudioReady:   false,
-			Summary:        "Discovery is implemented. Frequency, power, and TX controls are currently staged in a stub session until the Hermes packet engine is added.",
+			Summary:        "Only Hermes protocol 1 sessions are implemented in this build.",
 		},
 	}
 
@@ -129,6 +133,22 @@ func (s *stubSession) SetPTT(_ context.Context, enabled bool) error {
 	s.snapshot.PTT = enabled
 	s.snapshot.LastAction = "PTT state changed"
 	return nil
+}
+
+func (s *stubSession) SubscribeRXAudio(ctx context.Context) (<-chan []float32, error) {
+	ch := make(chan []float32)
+	close(ch)
+	if err := ctx.Err(); err != nil {
+		return ch, err
+	}
+	return ch, fmt.Errorf("audio streaming is not available for this session")
+}
+
+func (s *stubSession) WriteTXAudio(ctx context.Context, _ []float32) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fmt.Errorf("audio streaming is not available for this session")
 }
 
 func (s *stubSession) Close() error {

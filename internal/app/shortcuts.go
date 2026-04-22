@@ -6,6 +6,8 @@ func shortcuts() []Shortcut {
 		{Keys: "S", Description: "Open the settings dialog"},
 		{Keys: "P", Description: "Cycle through the available power presets"},
 		{Keys: "B", Description: "Cycle through the band presets"},
+		{Keys: "Shift + B", Description: "Read the current band"},
+		{Keys: "Shift + F", Description: "Read the current frequency"},
 		{Keys: "M", Description: "Cycle through the operating modes"},
 		{Keys: "Wheel", Description: "Tune up or down by the current step"},
 		{Keys: "Arrow Up", Description: "Tune up by one current step"},

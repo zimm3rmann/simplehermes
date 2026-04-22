@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,8 @@ type Service interface {
 	State(ctx context.Context) (ViewState, error)
 	Dispatch(ctx context.Context, cmd Command) (ViewState, error)
 	UpdateSettings(ctx context.Context, update SettingsUpdate) (ViewState, error)
+	HandleRXAudio(w http.ResponseWriter, r *http.Request)
+	HandleTXAudio(w http.ResponseWriter, r *http.Request)
 }
 
 type Command struct {
@@ -132,7 +135,7 @@ func defaultRadioModel() radioModel {
 			HardwareReady:  false,
 			RXAudioReady:   false,
 			TXAudioReady:   false,
-			Summary:        "Discovery is available. Hardware command and audio transport are being built in later milestones.",
+			Summary:        "Discovery is available. Connect to a Hermes protocol 1 device to start live hardware transport and audio streaming.",
 		},
 	}
 }

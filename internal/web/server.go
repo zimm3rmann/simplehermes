@@ -26,6 +26,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("POST /api/commands", s.handleCommands)
 	mux.HandleFunc("POST /api/settings", s.handleSettings)
+	mux.HandleFunc("GET /api/audio/rx", s.handleRXAudio)
+	mux.HandleFunc("GET /api/audio/tx", s.handleTXAudio)
 
 	return noStore(mux)
 }
@@ -72,6 +74,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
+}
+
+func (s *Server) handleRXAudio(w http.ResponseWriter, r *http.Request) {
+	s.service.HandleRXAudio(w, r)
+}
+
+func (s *Server) handleTXAudio(w http.ResponseWriter, r *http.Request) {
+	s.service.HandleTXAudio(w, r)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
