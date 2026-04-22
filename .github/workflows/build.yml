@@ -8,6 +8,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test (${{ matrix.os }})
@@ -77,3 +80,95 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.output_path }}
           if-no-files-found: error
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-24.04
+    needs: build
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: simplehermes-linux-amd64
+          path: release-assets/linux
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: simplehermes-windows-amd64
+          path: release-assets/windows
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag_name="${GITHUB_REF_NAME}"
+            release_name="${GITHUB_REF_NAME}"
+            prerelease=false
+            summary="Release for tag ${GITHUB_REF_NAME}"
+          else
+            safe_ref="$(printf '%s' "${GITHUB_REF_NAME}" | sed 's#[^A-Za-z0-9._-]#-#g')"
+            tag_name="build-${safe_ref}-${short_sha}"
+            release_name="Build ${GITHUB_REF_NAME} ${short_sha}"
+            prerelease=true
+            summary="Automated prerelease for branch ${GITHUB_REF_NAME}"
+          fi
+
+          {
+            echo "tag_name=${tag_name}"
+            echo "release_name=${release_name}"
+            echo "prerelease=${prerelease}"
+            echo "notes<<EOF"
+            echo "${summary}"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+          RELEASE_NAME: ${{ steps.release.outputs.release_name }}
+          RELEASE_NOTES: ${{ steps.release.outputs.notes }}
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        shell: bash
+        run: |
+          assets=(
+            "release-assets/linux/simplehermes-linux-amd64#simplehermes-linux-amd64"
+            "release-assets/windows/simplehermes-windows-amd64.exe#simplehermes-windows-amd64.exe"
+          )
+
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${RELEASE_NAME}" \
+              --notes "${RELEASE_NOTES}"
+
+            gh release upload "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber \
+              "${assets[@]}"
+            exit 0
+          fi
+
+          create_args=(
+            "${RELEASE_TAG}"
+            "--repo" "${GITHUB_REPOSITORY}"
+            "--title" "${RELEASE_NAME}"
+            "--notes" "${RELEASE_NOTES}"
+          )
+
+          if [[ "${RELEASE_PRERELEASE}" == "true" ]]; then
+            create_args+=("--prerelease" "--target" "${GITHUB_SHA}")
+          fi
+
+          gh release create "${create_args[@]}" "${assets[@]}"
