@@ -1,5 +1,6 @@
 const state = {
   current: null,
+  shortcuts: [],
   pollTimer: null,
   commandChain: Promise.resolve(),
   pendingFocus: null,
@@ -11,6 +12,8 @@ const state = {
   audioContext: null,
   settingsOpen: false,
   lastFocusedElement: null,
+  delayedAnnouncementTimer: null,
+  delayedAnnouncement: null,
 };
 
 const elements = {};
@@ -121,7 +124,7 @@ function bindActions() {
     button.addEventListener("click", () => {
       sendCommand(
         { type: "nudgeFrequency", steps: Number(button.dataset.nudge) },
-        (nextState) => frequencyAnnouncement(nextState.radio)
+        (nextState) => deferredFrequencyAnnouncement(nextState.radio)
       );
     });
   });
@@ -229,6 +232,7 @@ async function sendCommandNow(payload, announcementBuilder, focusRequest) {
 
 function applyState(nextState) {
   state.current = nextState;
+  state.shortcuts = nextState.shortcuts || [];
 
   renderApp(nextState.app, nextState.radio);
   renderDevices(nextState.devices, nextState.radio.device);
@@ -542,32 +546,36 @@ function handleKeydown(event) {
       event.preventDefault();
       openSettings();
       break;
+    case "h":
+      event.preventDefault();
+      announce(shortcutsAnnouncement());
+      break;
     case "[":
       event.preventDefault();
       sendCommand(
         { type: "nudgeFrequency", steps: event.shiftKey ? -10 : -1 },
-        (nextState) => frequencyAnnouncement(nextState.radio)
+        (nextState) => deferredFrequencyAnnouncement(nextState.radio)
       );
       break;
     case "]":
       event.preventDefault();
       sendCommand(
         { type: "nudgeFrequency", steps: event.shiftKey ? 10 : 1 },
-        (nextState) => frequencyAnnouncement(nextState.radio)
+        (nextState) => deferredFrequencyAnnouncement(nextState.radio)
       );
       break;
     case "arrowup":
       event.preventDefault();
       sendCommand(
         { type: "nudgeFrequency", steps: event.shiftKey ? 10 : 1 },
-        (nextState) => frequencyAnnouncement(nextState.radio)
+        (nextState) => deferredFrequencyAnnouncement(nextState.radio)
       );
       break;
     case "arrowdown":
       event.preventDefault();
       sendCommand(
         { type: "nudgeFrequency", steps: event.shiftKey ? -10 : -1 },
-        (nextState) => frequencyAnnouncement(nextState.radio)
+        (nextState) => deferredFrequencyAnnouncement(nextState.radio)
       );
       break;
     case "r":
@@ -600,6 +608,12 @@ function handleSettingsKeydown(event) {
   if (event.key === "Escape") {
     event.preventDefault();
     closeSettings();
+    return;
+  }
+
+  if (event.key.toLowerCase() === "h") {
+    event.preventDefault();
+    announce(shortcutsAnnouncement());
     return;
   }
 
@@ -702,7 +716,7 @@ function flushWheelTune() {
 
   sendCommand(
     { type: "nudgeFrequency", steps: -wholeNotches },
-    (nextState) => frequencyAnnouncement(nextState.radio)
+    (nextState) => deferredFrequencyAnnouncement(nextState.radio)
   );
 }
 
@@ -792,6 +806,38 @@ function frequencyAnnouncement(radioState) {
   return `Frequency ${formatFrequencyForAnnouncement(radioState.frequencyMHz)} megahertz.`;
 }
 
+function deferredFrequencyAnnouncement(radioState) {
+  return {
+    text: frequencyAnnouncement(radioState),
+    speak: true,
+    live: true,
+    cue: null,
+    delayMs: 750,
+    key: "frequency",
+  };
+}
+
+function shortcutsAnnouncement() {
+  if (!state.shortcuts.length) {
+    return "Shortcut list is not available yet.";
+  }
+
+  const parts = state.shortcuts.map((shortcut) => `${spokenShortcutKeys(shortcut.keys)}, ${shortcut.description}.`);
+  return `Keyboard shortcuts. ${parts.join(" ")}`;
+}
+
+function spokenShortcutKeys(keys) {
+  return keys
+    .replace(/Shift \+ \[/g, "Shift plus left bracket")
+    .replace(/Shift \+ \]/g, "Shift plus right bracket")
+    .replace(/\[/g, "left bracket")
+    .replace(/\]/g, "right bracket")
+    .replace(/Arrow Up/g, "arrow up")
+    .replace(/Arrow Down/g, "arrow down")
+    .replace(/Hold Space/g, "hold space")
+    .replace(/Wheel/g, "mouse wheel");
+}
+
 function formatFrequencyForAnnouncement(frequencyMHz) {
   const text = String(frequencyMHz ?? "").trim();
   const match = text.match(/^(\d+)(?:\.(\d+))?$/);
@@ -826,6 +872,16 @@ function announce(text) {
   const announcement = normalizeAnnouncement(text);
   if (!announcement) return;
 
+  if (announcement.delayMs > 0) {
+    queueDelayedAnnouncement(announcement);
+    return;
+  }
+
+  clearDelayedAnnouncement();
+  deliverAnnouncement(announcement);
+}
+
+function deliverAnnouncement(announcement) {
   if (announcement.cue) {
     playCue(announcement.cue);
   }
@@ -850,16 +906,38 @@ function announce(text) {
   }
 }
 
+function queueDelayedAnnouncement(announcement) {
+  clearDelayedAnnouncement();
+  state.delayedAnnouncement = announcement;
+  state.delayedAnnouncementTimer = window.setTimeout(() => {
+    const pending = state.delayedAnnouncement;
+    clearDelayedAnnouncement();
+    if (pending) {
+      deliverAnnouncement(pending);
+    }
+  }, announcement.delayMs);
+}
+
+function clearDelayedAnnouncement() {
+  if (state.delayedAnnouncementTimer !== null) {
+    window.clearTimeout(state.delayedAnnouncementTimer);
+    state.delayedAnnouncementTimer = null;
+  }
+  state.delayedAnnouncement = null;
+}
+
 function normalizeAnnouncement(value) {
   if (!value) return null;
   if (typeof value === "string") {
-    return { text: value, speak: true, live: true, cue: null };
+    return { text: value, speak: true, live: true, cue: null, delayMs: 0, key: "" };
   }
   return {
     text: value.text || "",
     speak: value.speak !== false,
     live: value.live !== false,
     cue: value.cue || null,
+    delayMs: Number(value.delayMs) > 0 ? Number(value.delayMs) : 0,
+    key: value.key || "",
   };
 }
 

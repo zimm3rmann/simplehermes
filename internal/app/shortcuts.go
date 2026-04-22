@@ -2,6 +2,7 @@ package app
 
 func shortcuts() []Shortcut {
 	return []Shortcut{
+		{Keys: "H", Description: "Read the shortcut list"},
 		{Keys: "S", Description: "Open the settings dialog"},
 		{Keys: "P", Description: "Cycle through the available power presets"},
 		{Keys: "B", Description: "Cycle through the band presets"},
