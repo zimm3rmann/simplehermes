@@ -13,17 +13,17 @@ import (
 )
 
 const (
-	protocol1DataPort     = 1024
-	metisPacketSize       = 1032
-	metisHeaderSize       = 8
-	ozyFrameSize          = 512
-	ozyFramePayloadSize   = ozyFrameSize - 8
-	ozySyncByte           = 0x7F
+	protocol1DataPort      = 1024
+	metisPacketSize        = 1032
+	metisHeaderSize        = 8
+	ozyFrameSize           = 512
+	ozyFramePayloadSize    = ozyFrameSize - 8
+	ozySyncByte            = 0x7F
 	protocol1ReceiverCount = 1
-	protocol1SampleGroup  = protocol1ReceiverCount*6 + 2
-	samplesPerFrame       = ozyFramePayloadSize / protocol1SampleGroup
-	samplesPerPacket      = samplesPerFrame * 2
-	packetInterval        = time.Duration(int64(time.Second) * samplesPerPacket / audioSampleRate)
+	protocol1SampleGroup   = protocol1ReceiverCount*6 + 2
+	samplesPerFrame        = ozyFramePayloadSize / protocol1SampleGroup
+	samplesPerPacket       = samplesPerFrame * 2
+	packetInterval         = time.Duration(int64(time.Second) * samplesPerPacket / audioSampleRate)
 )
 
 type protocol1Session struct {
@@ -39,12 +39,15 @@ type protocol1Session struct {
 	sendSequence uint32
 	commandIndex int
 
+	diagMu      sync.Mutex
+	diagnostics radio.Diagnostics
+
 	demod *demodulator
 	mod   *modulator
 
-	subMu        sync.Mutex
-	subscribers  map[chan []float32]struct{}
-	firstPacket  bool
+	subMu       sync.Mutex
+	subscribers map[chan []float32]struct{}
+	firstPacket bool
 }
 
 func newProtocol1Session(parent context.Context, device radio.Device, options radio.SessionOptions) (radio.Session, error) {
@@ -63,12 +66,12 @@ func newProtocol1Session(parent context.Context, device radio.Device, options ra
 
 	ctx, cancel := context.WithCancel(parent)
 	session := &protocol1Session{
-		ctx:        ctx,
-		cancel:     cancel,
-		conn:       conn,
-		remoteAddr: &net.UDPAddr{IP: net.ParseIP(device.Address), Port: protocol1DataPort},
-		demod:      newDemodulator(options.ModeID),
-		mod:        newModulator(options.ModeID),
+		ctx:         ctx,
+		cancel:      cancel,
+		conn:        conn,
+		remoteAddr:  &net.UDPAddr{IP: net.ParseIP(device.Address), Port: protocol1DataPort},
+		demod:       newDemodulator(options.ModeID),
+		mod:         newModulator(options.ModeID),
 		subscribers: make(map[chan []float32]struct{}),
 		snapshot: radio.Snapshot{
 			Connected:    true,
@@ -91,6 +94,14 @@ func newProtocol1Session(parent context.Context, device radio.Device, options ra
 				Summary:        "Opening Hermes protocol 1 transport and waiting for stream data.",
 			},
 		},
+	}
+	session.diagnostics = radio.Diagnostics{
+		Connected:     true,
+		Transport:     "hpsdr-protocol1-udp",
+		LocalAddress:  conn.LocalAddr().String(),
+		RemoteAddress: session.remoteAddr.String(),
+		StartedAt:     time.Now().Format(time.RFC3339),
+		LastControl:   "session-open",
 	}
 
 	session.wg.Add(1)
@@ -236,7 +247,19 @@ func (s *protocol1Session) WriteTXAudio(ctx context.Context, samples []float32) 
 	}
 
 	s.mod.Push(samples)
+	s.recordTXAudio(len(samples))
 	return nil
+}
+
+func (s *protocol1Session) Diagnostics() radio.Diagnostics {
+	s.diagMu.Lock()
+	out := s.diagnostics
+	s.diagMu.Unlock()
+
+	s.subMu.Lock()
+	out.RXSubscribers = uint64(len(s.subscribers))
+	s.subMu.Unlock()
+	return out
 }
 
 func (s *protocol1Session) Close() error {
@@ -258,6 +281,7 @@ func (s *protocol1Session) Close() error {
 	s.snapshot.Capabilities.Summary = "Hermes protocol 1 session is closed."
 	s.mu.Unlock()
 
+	s.recordConnected(false)
 	return nil
 }
 
@@ -287,6 +311,7 @@ func (s *protocol1Session) sendLoop() {
 		if err := s.sendPacket(); err != nil {
 			if !errors.Is(err, net.ErrClosed) && s.ctx.Err() == nil {
 				s.updateStatus(fmt.Sprintf("Radio send error: %v", err))
+				s.recordError(err.Error())
 			}
 			return
 		}
@@ -329,6 +354,7 @@ func (s *protocol1Session) receiveLoop() {
 			}
 
 			s.updateStatus(fmt.Sprintf("Radio receive error: %v", err))
+			s.recordError(err.Error())
 			return
 		}
 
@@ -339,6 +365,7 @@ func (s *protocol1Session) receiveLoop() {
 		if buffer[0] != 0xEF || buffer[1] != 0xFE || buffer[2] != 0x01 || buffer[3] != 0x06 {
 			continue
 		}
+		s.recordRXPacket()
 
 		packet := make([]float32, 0, samplesPerPacket)
 		packet = s.processEP6Frame(buffer[8:520], packet)
@@ -359,6 +386,7 @@ func (s *protocol1Session) processEP6Frame(frame []byte, packet []float32) []flo
 	if frame[0] != ozySyncByte || frame[1] != ozySyncByte || frame[2] != ozySyncByte {
 		return packet
 	}
+	s.recordRXFrame()
 
 	s.mu.RLock()
 	rxEnabled := s.snapshot.RXEnabled
@@ -383,6 +411,9 @@ func (s *protocol1Session) processEP6Frame(frame []byte, packet []float32) []flo
 func (s *protocol1Session) sendPacket() error {
 	packet := s.buildPacket()
 	_, err := s.conn.WriteToUDP(packet, s.remoteAddr)
+	if err == nil {
+		s.recordSendPacket()
+	}
 	return err
 }
 
@@ -424,6 +455,7 @@ func (s *protocol1Session) fillFrame(frame []byte, command int, state radio.Snap
 }
 
 func (s *protocol1Session) fillTXPayload(payload []byte) {
+	written := 0
 	offset := 0
 	for sample := 0; sample < samplesPerFrame && offset+8 <= len(payload); sample++ {
 		iSample, qSample := s.mod.NextIQ()
@@ -432,7 +464,9 @@ func (s *protocol1Session) fillTXPayload(payload []byte) {
 		payload[offset+6] = byte(qSample >> 8)
 		payload[offset+7] = byte(qSample)
 		offset += 8
+		written++
 	}
+	s.recordTXIQSamples(written)
 }
 
 func (s *protocol1Session) controlBytes(command int, state radio.Snapshot) [5]byte {
@@ -447,12 +481,15 @@ func (s *protocol1Session) controlBytes(command int, state radio.Snapshot) [5]by
 		control[0] = pttBit
 		control[1] = 0x00 // 48 kHz sample rate, single receiver
 		control[4] = byte((protocol1ReceiverCount - 1) << 3)
+		s.recordControl("base-config", 0)
 	case 1:
 		control[0] = 0x02 | pttBit
 		putFrequency(control[1:], state.FrequencyHz)
+		s.recordControl("tx-frequency", state.FrequencyHz)
 	case 2:
 		control[0] = 0x04 | pttBit
 		putFrequency(control[1:], state.FrequencyHz)
+		s.recordControl("rx1-frequency", state.FrequencyHz)
 	case 3:
 		control[0] = 0x12 | pttBit
 		control[1] = byte(clampDrive(state.PowerPercent))
@@ -462,13 +499,17 @@ func (s *protocol1Session) controlBytes(command int, state radio.Snapshot) [5]by
 		if state.PTT {
 			control[2] |= 0x10
 		}
+		s.recordControl("drive-and-hl2-pa", 0)
 	case 4:
 		control[0] = 0x14 | pttBit
 		control[4] = 0x40 | 26 // HL2 gain encoding, 26 ~= nominal zero attenuation.
+		s.recordControl("hl2-rx-gain", 0)
 	case 5:
 		control[0] = 0x1C | pttBit
+		s.recordControl("adc-selection", 0)
 	default:
 		control[0] = pttBit
+		s.recordControl("unknown", 0)
 	}
 
 	return control
@@ -487,6 +528,9 @@ func (s *protocol1Session) sendStartStop(command byte) error {
 	buffer[2] = 0x04
 	buffer[3] = command
 	_, err := s.conn.WriteToUDP(buffer, s.remoteAddr)
+	if err == nil {
+		s.recordStartStop(command)
+	}
 	return err
 }
 
@@ -498,8 +542,10 @@ func (s *protocol1Session) publishRXAudio(samples []float32) {
 		select {
 		case subscriber <- samples:
 		default:
+			s.recordRXAudioDrop()
 		}
 	}
+	s.recordRXAudio(len(samples))
 }
 
 func (s *protocol1Session) removeSubscriber(ch chan []float32) {
@@ -545,6 +591,89 @@ func (s *protocol1Session) updateStatus(status string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snapshot.Status = status
+}
+
+func (s *protocol1Session) recordConnected(connected bool) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.Connected = connected
+}
+
+func (s *protocol1Session) recordSendPacket() {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.SendPackets++
+}
+
+func (s *protocol1Session) recordStartStop(command byte) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	if command == 0 {
+		s.diagnostics.StopCommands++
+		s.diagnostics.LastControl = "stop-stream"
+		return
+	}
+	s.diagnostics.StartCommands++
+	s.diagnostics.LastControl = "start-stream"
+}
+
+func (s *protocol1Session) recordControl(name string, frequencyHz int64) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.ControlFrames++
+	s.diagnostics.LastControl = name
+	switch name {
+	case "tx-frequency":
+		s.diagnostics.FrequencyFrames++
+		s.diagnostics.LastTXFrequency = frequencyHz
+	case "rx1-frequency":
+		s.diagnostics.FrequencyFrames++
+		s.diagnostics.LastRXFrequency = frequencyHz
+	}
+}
+
+func (s *protocol1Session) recordRXPacket() {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.RXPackets++
+}
+
+func (s *protocol1Session) recordRXFrame() {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.RXFrames++
+}
+
+func (s *protocol1Session) recordRXAudio(samples int) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.RXAudioFrames++
+	s.diagnostics.RXAudioSamples += uint64(samples)
+}
+
+func (s *protocol1Session) recordRXAudioDrop() {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.RXAudioDrops++
+}
+
+func (s *protocol1Session) recordTXAudio(samples int) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.TXAudioFrames++
+	s.diagnostics.TXAudioSamples += uint64(samples)
+}
+
+func (s *protocol1Session) recordTXIQSamples(samples int) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.TXIQSamples += uint64(samples)
+}
+
+func (s *protocol1Session) recordError(message string) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	s.diagnostics.LastError = message
 }
 
 func decodeInt24(b0, b1, b2 byte) int32 {

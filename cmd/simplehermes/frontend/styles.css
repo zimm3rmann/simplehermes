@@ -125,6 +125,12 @@ select {
   min-width: 7.2rem;
 }
 
+.appbar-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
 .brand-block {
   display: grid;
   gap: 0.14rem;
@@ -492,7 +498,7 @@ select {
 }
 
 .toggle-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .button-row {
@@ -562,7 +568,8 @@ select {
   display: none;
 }
 
-.settings-modal {
+.settings-modal,
+.debug-modal {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -571,13 +578,18 @@ select {
   padding: 1rem;
 }
 
+.debug-modal[hidden] {
+  display: none;
+}
+
 .settings-dialog-backdrop {
   position: absolute;
   inset: 0;
   background: color-mix(in oklch, var(--ink) 30%, transparent);
 }
 
-.settings-dialog {
+.settings-dialog,
+.debug-dialog {
   position: relative;
   width: min(52rem, calc(100vw - 2rem));
   max-height: calc(100vh - 2rem);
@@ -586,11 +598,91 @@ select {
   overflow: auto;
 }
 
+.debug-dialog {
+  width: min(82rem, calc(100vw - 2rem));
+}
+
 .settings-dialog-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.6rem;
   align-items: start;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.debug-block {
+  display: grid;
+  gap: 0.42rem;
+  padding: 0.58rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--panel) 94%, white);
+}
+
+.debug-block h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.debug-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.32rem;
+  margin: 0;
+}
+
+.debug-metrics div {
+  min-width: 0;
+  padding: 0.38rem 0.45rem;
+  border: 1px solid color-mix(in oklch, var(--line) 70%, white);
+  border-radius: 0.36rem;
+  background: color-mix(in oklch, var(--panel-strong) 45%, white);
+}
+
+.debug-metrics dt {
+  margin: 0 0 0.12rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.debug-metrics dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+}
+
+.debug-log-block {
+  min-height: 12rem;
+}
+
+.debug-log {
+  display: grid;
+  align-content: start;
+  gap: 0.22rem;
+  max-height: 16rem;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.debug-log-entry {
+  padding: 0.32rem 0.42rem;
+  border-radius: 0.32rem;
+  background: color-mix(in oklch, var(--display-bg) 8%, white);
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 @media (max-height: 900px) {
@@ -666,6 +758,8 @@ select {
   .toggle-grid,
   .system-strip,
   .settings-grid,
+  .debug-grid,
+  .debug-metrics,
   .shortcut-list {
     grid-template-columns: 1fr;
   }

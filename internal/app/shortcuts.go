@@ -4,6 +4,7 @@ func shortcuts() []Shortcut {
 	return []Shortcut{
 		{Keys: "H", Description: "Read the shortcut list"},
 		{Keys: "S", Description: "Open the settings dialog"},
+		{Keys: "D", Description: "Open the debug console"},
 		{Keys: "P", Description: "Cycle through the available power presets"},
 		{Keys: "B", Description: "Cycle through the band presets"},
 		{Keys: "Shift + B", Description: "Read the current band"},

@@ -53,9 +53,21 @@ Not finished yet:
 - `T`: toggle transmit arm
 - `S`: open settings
 - `H`: read the shortcut list
+- `D`: open the debug console
 - `Hold Space`: key PTT while held
 
 Accessibility mode can announce state changes through the desktop screen reader stack.
+
+## Debugging
+
+Press `D` or use the `Debug` button in the title bar to open the debug console. It shows live Hermes transport counters, the last TX/RX frequency frames sent to the radio, RX packet and audio-frame counts, WebSocket state, Web Audio state, microphone state, and recent frontend command/audio events.
+
+If the app discovers and connects to a Hermes Lite 2 but there is no audio, open the debug console and check:
+
+- `RX packets` and `RX audio frames` should increase after connection.
+- `RX socket` should be `open`.
+- `Audio context` should be `running`; use `Start audio` if it is still suspended.
+- `Last RX freq` and `Last TX freq` should change when switching bands or entering a frequency.
 
 ## Build
 

@@ -22,6 +22,32 @@ type Capabilities struct {
 	Summary        string `json:"summary"`
 }
 
+type Diagnostics struct {
+	Connected       bool   `json:"connected"`
+	Transport       string `json:"transport"`
+	LocalAddress    string `json:"localAddress"`
+	RemoteAddress   string `json:"remoteAddress"`
+	StartedAt       string `json:"startedAt"`
+	LastControl     string `json:"lastControl"`
+	LastError       string `json:"lastError"`
+	SendPackets     uint64 `json:"sendPackets"`
+	StartCommands   uint64 `json:"startCommands"`
+	StopCommands    uint64 `json:"stopCommands"`
+	ControlFrames   uint64 `json:"controlFrames"`
+	FrequencyFrames uint64 `json:"frequencyFrames"`
+	LastTXFrequency int64  `json:"lastTxFrequencyHz"`
+	LastRXFrequency int64  `json:"lastRxFrequencyHz"`
+	RXPackets       uint64 `json:"rxPackets"`
+	RXFrames        uint64 `json:"rxFrames"`
+	RXAudioFrames   uint64 `json:"rxAudioFrames"`
+	RXAudioSamples  uint64 `json:"rxAudioSamples"`
+	RXAudioDrops    uint64 `json:"rxAudioDrops"`
+	RXSubscribers   uint64 `json:"rxSubscribers"`
+	TXAudioFrames   uint64 `json:"txAudioFrames"`
+	TXAudioSamples  uint64 `json:"txAudioSamples"`
+	TXIQSamples     uint64 `json:"txIqSamples"`
+}
+
 type Snapshot struct {
 	Connected    bool         `json:"connected"`
 	Device       *Device      `json:"device,omitempty"`
@@ -65,5 +91,6 @@ type Session interface {
 	SetPTT(ctx context.Context, enabled bool) error
 	SubscribeRXAudio(ctx context.Context) (<-chan []float32, error)
 	WriteTXAudio(ctx context.Context, samples []float32) error
+	Diagnostics() Diagnostics
 	Close() error
 }

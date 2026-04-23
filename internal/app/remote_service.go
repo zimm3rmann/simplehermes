@@ -12,6 +12,7 @@ import (
 	"simplehermes/internal/bands"
 	"simplehermes/internal/config"
 	"simplehermes/internal/modes"
+	"simplehermes/internal/radio"
 )
 
 type RemoteService struct {
@@ -50,6 +51,7 @@ func NewRemoteService(version string, cfg config.Config, configPath string) *Rem
 			PowerLevels: powerLevels(),
 			Shortcuts:   shortcuts(),
 			Radio:       defaultRadioModel().asView(),
+			Diagnostics: radio.Diagnostics{Transport: "remote"},
 			Messages: []Message{
 				{
 					Level: "info",

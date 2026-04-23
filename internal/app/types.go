@@ -41,15 +41,16 @@ type SettingsUpdate struct {
 }
 
 type ViewState struct {
-	App         AppMeta        `json:"app"`
-	Settings    config.Public  `json:"settings"`
-	Devices     []radio.Device `json:"devices"`
-	Bands       []bands.Preset `json:"bands"`
-	Modes       []modes.Preset `json:"modes"`
-	PowerLevels []PowerLevel   `json:"powerLevels"`
-	Shortcuts   []Shortcut     `json:"shortcuts"`
-	Radio       RadioView      `json:"radio"`
-	Messages    []Message      `json:"messages"`
+	App         AppMeta           `json:"app"`
+	Settings    config.Public     `json:"settings"`
+	Devices     []radio.Device    `json:"devices"`
+	Bands       []bands.Preset    `json:"bands"`
+	Modes       []modes.Preset    `json:"modes"`
+	PowerLevels []PowerLevel      `json:"powerLevels"`
+	Shortcuts   []Shortcut        `json:"shortcuts"`
+	Radio       RadioView         `json:"radio"`
+	Diagnostics radio.Diagnostics `json:"diagnostics"`
+	Messages    []Message         `json:"messages"`
 }
 
 type AppMeta struct {

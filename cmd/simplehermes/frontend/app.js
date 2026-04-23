@@ -20,6 +20,23 @@ const state = {
   micStream: null,
   micSource: null,
   lastMicError: "",
+  debugOpen: false,
+  lastDebugFocusedElement: null,
+  debugEvents: [],
+  diagnostics: null,
+  frontendDiagnostics: {
+    audioContextState: "not-created",
+    rxSocketState: "closed",
+    txSocketState: "closed",
+    rxFramesReceived: 0,
+    rxSamplesReceived: 0,
+    rxPlaybackCallbacks: 0,
+    rxUnderruns: 0,
+    txFramesSent: 0,
+    txSamplesSent: 0,
+    micState: "not-requested",
+    lastAudioError: "",
+  },
   settingsOpen: false,
   lastFocusedElement: null,
   delayedAnnouncementTimer: null,
@@ -61,6 +78,15 @@ function bindElements() {
   elements.settingsDialog = document.getElementById("settings-panel");
   elements.openSettingsButton = document.getElementById("open-settings");
   elements.closeSettingsButton = document.getElementById("close-settings");
+  elements.debugModal = document.getElementById("debug-modal");
+  elements.debugDialog = document.getElementById("debug-panel");
+  elements.openDebugButton = document.getElementById("open-debug");
+  elements.closeDebugButton = document.getElementById("close-debug");
+  elements.copyDebugButton = document.getElementById("copy-debug");
+  elements.clearDebugButton = document.getElementById("clear-debug");
+  elements.debugRadio = document.getElementById("debug-radio");
+  elements.debugAudio = document.getElementById("debug-audio");
+  elements.debugLog = document.getElementById("debug-log");
 
   elements.frequencyInput = document.getElementById("frequency-input");
   elements.stepSelect = document.getElementById("step-select");
@@ -69,6 +95,7 @@ function bindElements() {
   elements.rxToggle = document.getElementById("rx-toggle");
   elements.txToggle = document.getElementById("tx-toggle");
   elements.pttToggle = document.getElementById("ptt-toggle");
+  elements.audioStart = document.getElementById("audio-start");
 
   elements.radioForm = document.getElementById("radio-form");
   elements.settingsForm = document.getElementById("settings-form");
@@ -80,6 +107,29 @@ function bindElements() {
 }
 
 function bindActions() {
+  elements.openDebugButton.addEventListener("click", () => {
+    openDebug();
+  });
+
+  elements.closeDebugButton.addEventListener("click", () => {
+    closeDebug();
+  });
+
+  elements.copyDebugButton.addEventListener("click", () => {
+    copyDebugReport();
+  });
+
+  elements.clearDebugButton.addEventListener("click", () => {
+    state.debugEvents = [];
+    renderDebug();
+  });
+
+  elements.debugModal.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeDebug === "true") {
+      closeDebug();
+    }
+  });
+
   elements.openSettingsButton.addEventListener("click", () => {
     openSettings();
   });
@@ -163,6 +213,10 @@ function bindActions() {
     );
   });
 
+  elements.audioStart.addEventListener("click", () => {
+    startAudioFromUserGesture();
+  });
+
   elements.settingsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -220,6 +274,7 @@ async function sendCommandNow(payload, announcementBuilder, focusRequest) {
   }
 
   try {
+    logDebug("command", commandSummary(payload));
     const response = await fetch("/api/commands", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -228,6 +283,7 @@ async function sendCommandNow(payload, announcementBuilder, focusRequest) {
 
     const nextState = await response.json();
     applyState(nextState);
+    logDebug("state", stateSummaryForDebug(nextState));
 
     if (announcementBuilder) {
       announce(announcementBuilder(nextState));
@@ -236,6 +292,7 @@ async function sendCommandNow(payload, announcementBuilder, focusRequest) {
     return nextState;
   } catch (error) {
     state.pendingFocus = null;
+    logDebug("error", error && error.message ? error.message : "Command failed.");
     announce("Command failed.");
     throw error;
   }
@@ -244,12 +301,14 @@ async function sendCommandNow(payload, announcementBuilder, focusRequest) {
 function applyState(nextState) {
   state.current = nextState;
   state.shortcuts = nextState.shortcuts || [];
+  state.diagnostics = nextState.diagnostics || null;
 
   renderApp(nextState.app, nextState.radio);
   renderDevices(nextState.devices, nextState.radio.device);
   renderRadio(nextState.radio, nextState.bands, nextState.modes, nextState.powerLevels);
   renderSettings(nextState.settings);
   renderShortcuts(nextState.shortcuts);
+  renderDebug();
   syncAudioState(nextState.radio);
 }
 
@@ -521,6 +580,11 @@ function handleKeydown(event) {
   if (event.altKey || event.ctrlKey || event.metaKey) return;
   if (event.defaultPrevented) return;
 
+  if (state.debugOpen) {
+    handleDebugKeydown(event);
+    return;
+  }
+
   if (state.settingsOpen) {
     handleSettingsKeydown(event);
     return;
@@ -572,6 +636,10 @@ function handleKeydown(event) {
     case "h":
       event.preventDefault();
       announce(shortcutsAnnouncement());
+      break;
+    case "d":
+      event.preventDefault();
+      openDebug();
       break;
     case "[":
       event.preventDefault();
@@ -661,6 +729,54 @@ function handleSettingsKeydown(event) {
   }
 }
 
+function handleDebugKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeDebug();
+    return;
+  }
+
+  if (event.key === "Tab") {
+    trapDialogFocus(event, elements.debugDialog);
+  }
+}
+
+function openDebug() {
+  if (state.debugOpen) return;
+
+  state.debugOpen = true;
+  state.lastDebugFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  elements.main.inert = true;
+  elements.main.setAttribute("aria-hidden", "true");
+  elements.debugModal.hidden = false;
+  elements.openDebugButton.setAttribute("aria-expanded", "true");
+  renderDebug();
+
+  const focusable = getDialogFocusableElements(elements.debugDialog);
+  if (focusable.length) {
+    focusable[0].focus();
+  } else {
+    elements.debugDialog.focus();
+  }
+  announce("Debug console opened.");
+}
+
+function closeDebug() {
+  if (!state.debugOpen) return;
+
+  state.debugOpen = false;
+  elements.debugModal.hidden = true;
+  elements.main.inert = false;
+  elements.main.removeAttribute("aria-hidden");
+  elements.openDebugButton.setAttribute("aria-expanded", "false");
+
+  const restoreTarget = state.lastDebugFocusedElement && state.lastDebugFocusedElement.isConnected
+    ? state.lastDebugFocusedElement
+    : elements.openDebugButton;
+  state.lastDebugFocusedElement = null;
+  restoreTarget.focus();
+}
+
 function openSettings() {
   if (state.settingsOpen) return;
 
@@ -696,7 +812,11 @@ function closeSettings() {
 }
 
 function trapSettingsFocus(event) {
-  const focusable = getSettingsFocusableElements();
+  trapDialogFocus(event, elements.settingsDialog);
+}
+
+function trapDialogFocus(event, dialog) {
+  const focusable = getDialogFocusableElements(dialog);
   if (!focusable.length) return;
 
   const first = focusable[0];
@@ -704,7 +824,7 @@ function trapSettingsFocus(event) {
   const active = document.activeElement;
 
   if (event.shiftKey) {
-    if (active === first || active === elements.settingsDialog) {
+    if (active === first || active === dialog) {
       event.preventDefault();
       last.focus();
     }
@@ -718,7 +838,11 @@ function trapSettingsFocus(event) {
 }
 
 function getSettingsFocusableElements() {
-  return Array.from(elements.settingsDialog.querySelectorAll(
+  return getDialogFocusableElements(elements.settingsDialog);
+}
+
+function getDialogFocusableElements(dialog) {
+  return Array.from(dialog.querySelectorAll(
     'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
   ));
 }
@@ -909,6 +1033,28 @@ function formatStep(stepHz) {
   return `${stepHz} Hz`;
 }
 
+function startAudioFromUserGesture() {
+  const audioContext = ensureAudioContext();
+  if (!audioContext) {
+    logAudioError("Web Audio is unavailable in this desktop webview.");
+    announce("Audio engine is not available.");
+    return;
+  }
+
+  resumeAudioContext();
+  const radio = state.current?.radio;
+  if (radio?.connected) {
+    ensureRXAudio();
+    if (radio.txEnabled) {
+      ensureTXAudio();
+    }
+  }
+
+  updateAudioDiagnostics();
+  logDebug("audio", `manual audio start requested; context ${state.frontendDiagnostics.audioContextState}`);
+  announce(radio?.connected ? "Audio start requested." : "Audio engine ready. Connect a radio to start receive audio.");
+}
+
 function syncAudioState(radioState) {
   const shouldReceive = Boolean(radioState.connected && radioState.rxEnabled && radioState.capabilities.rxAudioReady);
   if (shouldReceive) {
@@ -932,25 +1078,36 @@ function ensureRXAudio() {
   }
 
   const socket = new WebSocket(websocketURL("/api/audio/rx"));
+  logDebug("audio", "opening RX audio websocket");
   socket.binaryType = "arraybuffer";
   socket.addEventListener("open", () => {
+    logDebug("audio", "RX audio websocket open");
     ensureRXPlayback();
     resumeAudioContext();
+    updateAudioDiagnostics();
   });
   socket.addEventListener("message", (event) => {
     if (!(event.data instanceof ArrayBuffer)) return;
-    state.rxBuffers.push(new Float32Array(event.data));
+    const frame = new Float32Array(event.data);
+    state.rxBuffers.push(frame);
+    state.frontendDiagnostics.rxFramesReceived++;
+    state.frontendDiagnostics.rxSamplesReceived += frame.length;
+    updateAudioDiagnostics();
   });
   socket.addEventListener("close", () => {
     if (state.rxSocket === socket) {
+      logDebug("audio", "RX audio websocket closed");
       state.rxSocket = null;
       clearRXBuffers();
+      updateAudioDiagnostics();
     }
   });
   socket.addEventListener("error", () => {
+    logAudioError("RX audio websocket error");
     if (state.rxSocket === socket) {
       state.rxSocket = null;
     }
+    updateAudioDiagnostics();
   });
 
   state.rxSocket = socket;
@@ -964,6 +1121,7 @@ function ensureRXPlayback() {
 
   const processor = audioContext.createScriptProcessor(1024, 0, 2);
   processor.onaudioprocess = (event) => {
+    state.frontendDiagnostics.rxPlaybackCallbacks++;
     const left = event.outputBuffer.getChannelData(0);
     const right = event.outputBuffer.getChannelData(1);
     fillOutputBuffer(left);
@@ -971,6 +1129,8 @@ function ensureRXPlayback() {
   };
   processor.connect(audioContext.destination);
   state.rxNode = processor;
+  updateAudioDiagnostics();
+  logDebug("audio", "RX playback processor connected");
 }
 
 function fillOutputBuffer(target) {
@@ -980,6 +1140,7 @@ function fillOutputBuffer(target) {
     const current = state.rxBuffers[0];
     if (!current) {
       target.fill(0, written);
+      state.frontendDiagnostics.rxUnderruns++;
       return;
     }
 
@@ -1003,21 +1164,31 @@ async function ensureTXAudio() {
 
   const audioContext = ensureAudioContext();
   if (!audioContext || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    logAudioError("Microphone capture is unavailable in this desktop webview.");
     return;
   }
 
   if (!state.txSocket || state.txSocket.readyState > WebSocket.OPEN) {
     const socket = new WebSocket(websocketURL("/api/audio/tx"));
+    logDebug("audio", "opening TX audio websocket");
     socket.binaryType = "arraybuffer";
+    socket.addEventListener("open", () => {
+      logDebug("audio", "TX audio websocket open");
+      updateAudioDiagnostics();
+    });
     socket.addEventListener("close", () => {
       if (state.txSocket === socket) {
+        logDebug("audio", "TX audio websocket closed");
         state.txSocket = null;
+        updateAudioDiagnostics();
       }
     });
     socket.addEventListener("error", () => {
+      logAudioError("TX audio websocket error");
       if (state.txSocket === socket) {
         state.txSocket = null;
       }
+      updateAudioDiagnostics();
     });
     state.txSocket = socket;
   }
@@ -1049,6 +1220,9 @@ async function ensureTXAudio() {
 
       const input = event.inputBuffer.getChannelData(0);
       state.txSocket.send(floatsToArrayBuffer(input));
+      state.frontendDiagnostics.txFramesSent++;
+      state.frontendDiagnostics.txSamplesSent += input.length;
+      updateAudioDiagnostics();
     };
 
     source.connect(processor);
@@ -1060,9 +1234,14 @@ async function ensureTXAudio() {
     state.txNode = processor;
     state.txMonitor = silentMonitor;
     state.lastMicError = "";
+    state.frontendDiagnostics.micState = "capturing";
     resumeAudioContext();
+    updateAudioDiagnostics();
+    logDebug("audio", "microphone capture connected");
   } catch (error) {
     const message = error && error.message ? error.message : "Microphone access failed.";
+    state.frontendDiagnostics.micState = "failed";
+    logAudioError(message);
     if (state.lastMicError !== message) {
       state.lastMicError = message;
       announce(`Microphone unavailable. ${message}`);
@@ -1080,6 +1259,7 @@ function stopRXAudio() {
     state.rxNode = null;
   }
   clearRXBuffers();
+  updateAudioDiagnostics();
 }
 
 function stopTXAudio() {
@@ -1103,6 +1283,8 @@ function stopTXAudio() {
     state.micStream.getTracks().forEach((track) => track.stop());
     state.micStream = null;
   }
+  state.frontendDiagnostics.micState = "stopped";
+  updateAudioDiagnostics();
 }
 
 function shutdownAudio() {
@@ -1125,6 +1307,167 @@ function floatsToArrayBuffer(input) {
   const view = new Float32Array(buffer);
   view.set(input);
   return buffer;
+}
+
+function updateAudioDiagnostics() {
+  state.frontendDiagnostics.audioContextState = state.audioContext ? state.audioContext.state : "not-created";
+  state.frontendDiagnostics.rxSocketState = websocketState(state.rxSocket);
+  state.frontendDiagnostics.txSocketState = websocketState(state.txSocket);
+  if (state.micStream && state.micStream.active) {
+    state.frontendDiagnostics.micState = "capturing";
+  } else if (!state.micStream && state.frontendDiagnostics.micState === "capturing") {
+    state.frontendDiagnostics.micState = "stopped";
+  }
+  renderDebug();
+}
+
+function websocketState(socket) {
+  if (!socket) return "closed";
+  switch (socket.readyState) {
+    case WebSocket.CONNECTING:
+      return "connecting";
+    case WebSocket.OPEN:
+      return "open";
+    case WebSocket.CLOSING:
+      return "closing";
+    case WebSocket.CLOSED:
+      return "closed";
+    default:
+      return "unknown";
+  }
+}
+
+function logAudioError(message) {
+  state.frontendDiagnostics.lastAudioError = message;
+  logDebug("audio-error", message);
+  updateAudioDiagnostics();
+}
+
+function logDebug(kind, text) {
+  const entry = {
+    time: new Date().toLocaleTimeString(),
+    kind,
+    text,
+  };
+  state.debugEvents.unshift(entry);
+  if (state.debugEvents.length > 80) {
+    state.debugEvents.length = 80;
+  }
+  renderDebug();
+}
+
+function renderDebug() {
+  if (!elements.debugRadio || !elements.debugAudio || !elements.debugLog) return;
+  if (!state.debugOpen && elements.debugModal?.hidden) return;
+
+  const diagnostics = state.diagnostics || {};
+  renderMetrics(elements.debugRadio, [
+    ["Connected", yesNo(diagnostics.connected)],
+    ["Transport", diagnostics.transport || "none"],
+    ["Local socket", diagnostics.localAddress || "none"],
+    ["Radio socket", diagnostics.remoteAddress || "none"],
+    ["Started", diagnostics.startedAt || "not started"],
+    ["Last control", diagnostics.lastControl || "none"],
+    ["Last error", diagnostics.lastError || "none"],
+    ["Send packets", diagnostics.sendPackets || 0],
+    ["Start / stop", `${diagnostics.startCommands || 0} / ${diagnostics.stopCommands || 0}`],
+    ["Control frames", diagnostics.controlFrames || 0],
+    ["Frequency frames", diagnostics.frequencyFrames || 0],
+    ["Last TX freq", formatHz(diagnostics.lastTxFrequencyHz)],
+    ["Last RX freq", formatHz(diagnostics.lastRxFrequencyHz)],
+    ["RX packets", diagnostics.rxPackets || 0],
+    ["RX frames", diagnostics.rxFrames || 0],
+    ["RX audio frames", diagnostics.rxAudioFrames || 0],
+    ["RX audio samples", diagnostics.rxAudioSamples || 0],
+    ["RX drops", diagnostics.rxAudioDrops || 0],
+    ["RX subscribers", diagnostics.rxSubscribers || 0],
+    ["TX audio frames", diagnostics.txAudioFrames || 0],
+    ["TX audio samples", diagnostics.txAudioSamples || 0],
+    ["TX IQ samples", diagnostics.txIqSamples || 0],
+  ]);
+
+  const audio = state.frontendDiagnostics;
+  renderMetrics(elements.debugAudio, [
+    ["Audio context", audio.audioContextState],
+    ["RX socket", audio.rxSocketState],
+    ["TX socket", audio.txSocketState],
+    ["RX frames received", audio.rxFramesReceived],
+    ["RX samples received", audio.rxSamplesReceived],
+    ["Playback callbacks", audio.rxPlaybackCallbacks],
+    ["Playback underruns", audio.rxUnderruns],
+    ["Buffered RX chunks", state.rxBuffers.length],
+    ["TX frames sent", audio.txFramesSent],
+    ["TX samples sent", audio.txSamplesSent],
+    ["Microphone", audio.micState],
+    ["Last audio error", audio.lastAudioError || "none"],
+  ]);
+
+  elements.debugLog.innerHTML = "";
+  state.debugEvents.forEach((entry) => {
+    const item = document.createElement("li");
+    item.className = "debug-log-entry";
+    item.textContent = `${entry.time} [${entry.kind}] ${entry.text}`;
+    elements.debugLog.appendChild(item);
+  });
+}
+
+function renderMetrics(container, metrics) {
+  container.innerHTML = "";
+  metrics.forEach(([label, value]) => {
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    const detail = document.createElement("dd");
+    term.textContent = label;
+    detail.textContent = String(value);
+    row.appendChild(term);
+    row.appendChild(detail);
+    container.appendChild(row);
+  });
+}
+
+function commandSummary(payload) {
+  const parts = [payload.type];
+  if (payload.bandId) parts.push(`band=${payload.bandId}`);
+  if (payload.modeId) parts.push(`mode=${payload.modeId}`);
+  if (payload.frequencyMHz) parts.push(`freq=${payload.frequencyMHz} MHz`);
+  if (payload.stepHz) parts.push(`step=${payload.stepHz}`);
+  if (payload.steps) parts.push(`steps=${payload.steps}`);
+  if (payload.powerPercent) parts.push(`power=${payload.powerPercent}%`);
+  if (typeof payload.enabled === "boolean") parts.push(`enabled=${payload.enabled}`);
+  return parts.join(" ");
+}
+
+function stateSummaryForDebug(nextState) {
+  const radio = nextState.radio;
+  return `${radio.bandLabel} ${radio.frequencyMHz} MHz ${radio.modeLabel}; hardware=${yesNo(radio.capabilities.hardwareReady)} rxAudio=${yesNo(radio.capabilities.rxAudioReady)}`;
+}
+
+async function copyDebugReport() {
+  const report = JSON.stringify({
+    radio: state.current?.radio || null,
+    app: state.current?.app || null,
+    diagnostics: state.diagnostics || null,
+    frontendAudio: state.frontendDiagnostics,
+    recentEvents: state.debugEvents.slice(0, 30),
+  }, null, 2);
+
+  try {
+    await navigator.clipboard.writeText(report);
+    announce("Debug report copied.");
+    logDebug("debug", "debug report copied to clipboard");
+  } catch (error) {
+    announce("Unable to copy debug report.");
+    logDebug("error", error && error.message ? error.message : "clipboard copy failed");
+  }
+}
+
+function yesNo(value) {
+  return value ? "yes" : "no";
+}
+
+function formatHz(value) {
+  if (!value) return "none";
+  return `${value} Hz`;
 }
 
 function announce(text) {
@@ -1268,7 +1611,10 @@ function playCue(cue) {
 }
 
 function ensureAudioContext() {
-  if (state.audioContext) return state.audioContext;
+  if (state.audioContext) {
+    updateAudioDiagnostics();
+    return state.audioContext;
+  }
 
   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextCtor) {
@@ -1280,6 +1626,7 @@ function ensureAudioContext() {
   } catch (error) {
     state.audioContext = new AudioContextCtor();
   }
+  updateAudioDiagnostics();
   return state.audioContext;
 }
 
@@ -1288,7 +1635,10 @@ function resumeAudioContext() {
   if (!audioContext || audioContext.state !== "suspended") return;
 
   audioContext.resume().catch((error) => {
+    logAudioError(error && error.message ? error.message : "audio resume failed");
     console.error("audio resume failed", error);
+  }).finally(() => {
+    updateAudioDiagnostics();
   });
 }
 

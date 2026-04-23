@@ -372,8 +372,19 @@ func (s *LocalService) snapshotLocked() ViewState {
 		PowerLevels: powerLevels(),
 		Shortcuts:   shortcuts(),
 		Radio:       s.radio.asView(),
+		Diagnostics: s.diagnosticsLocked(),
 		Messages:    messages,
 	}
+}
+
+func (s *LocalService) diagnosticsLocked() radio.Diagnostics {
+	if s.session == nil {
+		return radio.Diagnostics{
+			Connected: false,
+			Transport: "none",
+		}
+	}
+	return s.session.Diagnostics()
 }
 
 func (s *LocalService) pushMessage(level, text string) {

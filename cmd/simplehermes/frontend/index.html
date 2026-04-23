@@ -38,7 +38,10 @@
               <dd id="app-transport">Waiting</dd>
             </div>
           </dl>
-          <button id="open-settings" type="button" class="appbar-button" aria-keyshortcuts="S" aria-haspopup="dialog" aria-controls="settings-modal" aria-expanded="false" title="Open settings (S)">Settings</button>
+          <div class="appbar-actions">
+            <button id="open-debug" type="button" class="appbar-button ghost" aria-keyshortcuts="D" aria-haspopup="dialog" aria-controls="debug-modal" aria-expanded="false" title="Open debug console (D)">Debug</button>
+            <button id="open-settings" type="button" class="appbar-button" aria-keyshortcuts="S" aria-haspopup="dialog" aria-controls="settings-modal" aria-expanded="false" title="Open settings (S)">Settings</button>
+          </div>
         </div>
       </header>
 
@@ -158,6 +161,7 @@
                 <button id="rx-toggle" type="button" class="toggle" aria-keyshortcuts="R">Receive</button>
                 <button id="tx-toggle" type="button" class="toggle" aria-keyshortcuts="T">Transmit armed</button>
                 <button id="ptt-toggle" type="button" class="toggle toggle-alert" aria-keyshortcuts="Space">PTT</button>
+                <button id="audio-start" type="button" class="toggle">Start audio</button>
               </div>
             </section>
           </div>
@@ -230,6 +234,40 @@
             </div>
           </div>
         </form>
+      </section>
+    </div>
+
+    <div id="debug-modal" class="debug-modal" hidden>
+      <div class="settings-dialog-backdrop" data-close-debug="true"></div>
+      <section id="debug-panel" class="debug-dialog panel" role="dialog" aria-modal="true" aria-labelledby="debug-title" tabindex="-1">
+        <div class="settings-dialog-header">
+          <div class="panel-header">
+            <p class="panel-kicker">Diagnostics</p>
+            <h2 id="debug-title">Debug Console</h2>
+          </div>
+          <div class="button-row">
+            <button id="copy-debug" type="button">Copy report</button>
+            <button id="clear-debug" type="button" class="ghost">Clear log</button>
+            <button id="close-debug" type="button" class="ghost" aria-label="Close debug console">Close</button>
+          </div>
+        </div>
+
+        <div class="debug-grid" aria-label="Live diagnostics">
+          <section class="debug-block" aria-labelledby="debug-radio-title">
+            <h3 id="debug-radio-title">Radio Transport</h3>
+            <dl id="debug-radio" class="debug-metrics"></dl>
+          </section>
+
+          <section class="debug-block" aria-labelledby="debug-audio-title">
+            <h3 id="debug-audio-title">Desktop Audio</h3>
+            <dl id="debug-audio" class="debug-metrics"></dl>
+          </section>
+        </div>
+
+        <section class="debug-block debug-log-block" aria-labelledby="debug-log-title">
+          <h3 id="debug-log-title">Event Log</h3>
+          <ol id="debug-log" class="debug-log"></ol>
+        </section>
       </section>
     </div>
 

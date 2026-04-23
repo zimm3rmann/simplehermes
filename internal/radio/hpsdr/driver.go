@@ -151,6 +151,17 @@ func (s *stubSession) WriteTXAudio(ctx context.Context, _ []float32) error {
 	return fmt.Errorf("audio streaming is not available for this session")
 }
 
+func (s *stubSession) Diagnostics() radio.Diagnostics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return radio.Diagnostics{
+		Connected: s.snapshot.Connected,
+		Transport: "unsupported",
+		LastError: s.snapshot.Status,
+	}
+}
+
 func (s *stubSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
