@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"simplehermes/internal/bands"
@@ -233,10 +234,20 @@ func (s *LocalService) UpdateSettings(_ context.Context, update SettingsUpdate) 
 	next.Mode = update.Mode
 	next.ListenAddress = update.ListenAddress
 	next.RemoteBaseURL = update.RemoteBaseURL
+	if update.ClearRemoteAuthToken {
+		next.RemoteAuthToken = ""
+	} else if token := strings.TrimSpace(update.RemoteAuthToken); token != "" {
+		next.RemoteAuthToken = token
+	}
 	next.AccessibilityMode = update.AccessibilityMode
+	next.AudioInputDeviceID = update.AudioInputDeviceID
+	next.AudioOutputDeviceID = update.AudioOutputDeviceID
 	next.Normalize()
 
-	s.pendingRestart = s.activeMode != next.Mode || s.config.ListenAddress != next.ListenAddress
+	authChanged := s.config.RemoteAuthToken != next.RemoteAuthToken
+	s.pendingRestart = s.activeMode != next.Mode ||
+		s.config.ListenAddress != next.ListenAddress ||
+		(s.activeMode == config.ModeServer && authChanged)
 	s.config = next
 
 	if err := config.Save(s.configPath, next); err != nil {

@@ -34,10 +34,14 @@ type Command struct {
 }
 
 type SettingsUpdate struct {
-	Mode              config.Mode `json:"mode"`
-	ListenAddress     string      `json:"listenAddress"`
-	RemoteBaseURL     string      `json:"remoteBaseUrl"`
-	AccessibilityMode bool        `json:"accessibilityMode"`
+	Mode                 config.Mode `json:"mode"`
+	ListenAddress        string      `json:"listenAddress"`
+	RemoteBaseURL        string      `json:"remoteBaseUrl"`
+	RemoteAuthToken      string      `json:"remoteAuthToken"`
+	ClearRemoteAuthToken bool        `json:"clearRemoteAuthToken"`
+	AccessibilityMode    bool        `json:"accessibilityMode"`
+	AudioInputDeviceID   string      `json:"audioInputDeviceId"`
+	AudioOutputDeviceID  string      `json:"audioOutputDeviceId"`
 }
 
 type ViewState struct {

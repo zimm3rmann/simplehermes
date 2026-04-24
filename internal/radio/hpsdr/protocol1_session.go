@@ -241,9 +241,14 @@ func (s *protocol1Session) WriteTXAudio(ctx context.Context, samples []float32) 
 
 	s.mu.RLock()
 	connected := s.snapshot.Connected
+	txActive := s.snapshot.TXEnabled && s.snapshot.PTT
 	s.mu.RUnlock()
 	if !connected {
 		return fmt.Errorf("radio session is not connected")
+	}
+	if !txActive {
+		s.mod.Reset()
+		return nil
 	}
 
 	s.mod.Push(samples)

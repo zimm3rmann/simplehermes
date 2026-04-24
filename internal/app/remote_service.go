@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,7 @@ func NewRemoteService(version string, cfg config.Config, configPath string) *Rem
 				VisualDirection: "Industrial station console with warm neutrals and signal-orange accents.",
 			},
 			Settings:    cfg.Public(),
+			Devices:     []radio.Device{},
 			Bands:       bands.All(),
 			Modes:       modes.All(),
 			PowerLevels: powerLevels(),
@@ -67,11 +69,7 @@ func NewRemoteService(version string, cfg config.Config, configPath string) *Rem
 func (s *RemoteService) State(ctx context.Context) (ViewState, error) {
 	state, err := s.fetchRemoteState(ctx)
 	if err != nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.lastState.App.ProxyHealthy = false
-		s.pushMessageLocked("error", fmt.Sprintf("remote state: %v", err))
-		return s.lastState, err
+		return s.lastStateWithError("remote state", err), err
 	}
 
 	s.mu.Lock()
@@ -83,28 +81,40 @@ func (s *RemoteService) State(ctx context.Context) (ViewState, error) {
 func (s *RemoteService) Dispatch(ctx context.Context, cmd Command) (ViewState, error) {
 	body, err := json.Marshal(cmd)
 	if err != nil {
-		return ViewState{}, err
+		return s.lastStateWithError("remote command", err), err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.config.RemoteBaseURL+"/api/commands", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.remoteBaseURL()+"/api/commands", bytes.NewReader(body))
 	if err != nil {
-		return ViewState{}, err
+		return s.lastStateWithError("remote command", err), err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	s.applyRemoteAuth(req)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return ViewState{}, err
+		return s.lastStateWithError("remote command", err), err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return ViewState{}, fmt.Errorf("remote command failed with %s", resp.Status)
+		remoteErr := fmt.Errorf("remote command failed with %s", resp.Status)
+
+		var remoteState ViewState
+		if err := json.NewDecoder(resp.Body).Decode(&remoteState); err == nil {
+			state := s.adaptRemoteState(remoteState)
+			s.mu.Lock()
+			s.lastState = state
+			s.mu.Unlock()
+			return state, remoteErr
+		}
+
+		return s.lastStateWithError("remote command", remoteErr), remoteErr
 	}
 
 	var remoteState ViewState
 	if err := json.NewDecoder(resp.Body).Decode(&remoteState); err != nil {
-		return ViewState{}, err
+		return s.lastStateWithError("remote command", err), err
 	}
 
 	state := s.adaptRemoteState(remoteState)
@@ -123,7 +133,14 @@ func (s *RemoteService) UpdateSettings(_ context.Context, update SettingsUpdate)
 	next.Mode = update.Mode
 	next.ListenAddress = update.ListenAddress
 	next.RemoteBaseURL = update.RemoteBaseURL
+	if update.ClearRemoteAuthToken {
+		next.RemoteAuthToken = ""
+	} else if token := strings.TrimSpace(update.RemoteAuthToken); token != "" {
+		next.RemoteAuthToken = token
+	}
 	next.AccessibilityMode = update.AccessibilityMode
+	next.AudioInputDeviceID = update.AudioInputDeviceID
+	next.AudioOutputDeviceID = update.AudioOutputDeviceID
 	next.Normalize()
 
 	s.pendingRestart = s.activeMode != next.Mode || s.config.ListenAddress != next.ListenAddress
@@ -147,10 +164,11 @@ func (s *RemoteService) UpdateSettings(_ context.Context, update SettingsUpdate)
 }
 
 func (s *RemoteService) fetchRemoteState(ctx context.Context) (ViewState, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.config.RemoteBaseURL+"/api/state", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.remoteBaseURL()+"/api/state", nil)
 	if err != nil {
 		return ViewState{}, err
 	}
+	s.applyRemoteAuth(req)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -171,14 +189,80 @@ func (s *RemoteService) fetchRemoteState(ctx context.Context) (ViewState, error)
 }
 
 func (s *RemoteService) adaptRemoteState(remoteState ViewState) ViewState {
+	cfg, pendingRestart := s.configSnapshot()
+
 	remoteMode := remoteState.App.ActiveMode
 	remoteState.App.ActiveMode = string(config.ModeClient)
 	remoteState.App.RemoteMode = remoteMode
-	remoteState.App.RemoteEndpoint = s.config.RemoteBaseURL
+	remoteState.App.RemoteEndpoint = cfg.RemoteBaseURL
 	remoteState.App.ProxyHealthy = true
-	remoteState.App.PendingRestart = s.pendingRestart
-	remoteState.Settings = s.config.Public()
-	return remoteState
+	remoteState.App.PendingRestart = pendingRestart
+	remoteState.Settings = cfg.Public()
+	return renderableState(remoteState)
+}
+
+func (s *RemoteService) remoteBaseURL() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.RemoteBaseURL
+}
+
+func (s *RemoteService) applyRemoteAuth(req *http.Request) {
+	if token := s.remoteAuthToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+}
+
+func (s *RemoteService) remoteAuthHeaders() http.Header {
+	headers := http.Header{}
+	if token := s.remoteAuthToken(); token != "" {
+		headers.Set("Authorization", "Bearer "+token)
+	}
+	return headers
+}
+
+func (s *RemoteService) remoteAuthToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.RemoteAuthToken
+}
+
+func (s *RemoteService) configSnapshot() (config.Config, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config, s.pendingRestart
+}
+
+func (s *RemoteService) lastStateWithError(scope string, err error) ViewState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.lastState.App.ProxyHealthy = false
+	s.lastState = renderableState(s.lastState)
+	s.pushMessageLocked("error", fmt.Sprintf("%s: %v", scope, err))
+	return s.lastState
+}
+
+func renderableState(state ViewState) ViewState {
+	if state.Devices == nil {
+		state.Devices = []radio.Device{}
+	}
+	if state.Bands == nil {
+		state.Bands = bands.All()
+	}
+	if state.Modes == nil {
+		state.Modes = modes.All()
+	}
+	if state.PowerLevels == nil {
+		state.PowerLevels = powerLevels()
+	}
+	if state.Shortcuts == nil {
+		state.Shortcuts = shortcuts()
+	}
+	if state.Messages == nil {
+		state.Messages = []Message{}
+	}
+	return state
 }
 
 func (s *RemoteService) pushMessageLocked(level, text string) {

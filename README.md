@@ -29,6 +29,8 @@ Implemented today:
 - Local-mode and server-mode radio state management
 - Client-mode proxying to a remote SimpleHermes server
 - Audio WebSocket transport for local and remote control paths
+- Configurable microphone and speaker device preferences where the desktop webview exposes device selection
+- Optional shared access key for the external server-mode remote API
 - Keyboard shortcuts for common operating actions
 
 Not finished yet:
@@ -115,6 +117,8 @@ Default config path:
 - `client`: connect to a remote SimpleHermes server and control that station
 
 The current default listen address is `127.0.0.1:8787`.
+
+When exposing `server` mode beyond localhost, set a remote access key in Settings and restart the app so the external API listener requires bearer authentication. Client mode uses the same saved key when proxying state, commands, and audio WebSockets to that server.
 
 ## Development
 

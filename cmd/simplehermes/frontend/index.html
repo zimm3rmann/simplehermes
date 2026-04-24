@@ -224,6 +224,30 @@
               <input id="settings-remote" name="remoteBaseUrl" autocomplete="off">
             </label>
 
+            <label class="field settings-span">
+              <span>Remote access key</span>
+              <input id="settings-remote-auth" name="remoteAuthToken" type="password" autocomplete="new-password">
+            </label>
+
+            <label class="checkbox-field settings-span">
+              <input id="settings-clear-remote-auth" name="clearRemoteAuthToken" type="checkbox">
+              <span>Clear saved remote access key</span>
+            </label>
+
+            <label class="field">
+              <span>Microphone</span>
+              <select id="settings-audio-input" name="audioInputDeviceId">
+                <option value="">System default microphone</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Speaker</span>
+              <select id="settings-audio-output" name="audioOutputDeviceId">
+                <option value="">System default speaker</option>
+              </select>
+            </label>
+
             <label class="checkbox-field settings-span">
               <input id="settings-accessibility" name="accessibilityMode" type="checkbox">
               <span>Accessibility mode with spoken and live status announcements</span>

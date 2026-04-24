@@ -100,13 +100,13 @@ func (s *RemoteService) proxyAudio(w http.ResponseWriter, r *http.Request, path 
 	}
 	defer localConn.Close()
 
-	remoteURL, err := websocketURL(s.config.RemoteBaseURL, path)
+	remoteURL, err := websocketURL(s.remoteBaseURL(), path)
 	if err != nil {
 		_ = localConn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
 		return
 	}
 
-	remoteConn, _, err := websocket.DefaultDialer.DialContext(r.Context(), remoteURL, nil)
+	remoteConn, _, err := websocket.DefaultDialer.DialContext(r.Context(), remoteURL, s.remoteAuthHeaders())
 	if err != nil {
 		_ = localConn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("remote audio connect failed: %v", err)))
 		return

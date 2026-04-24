@@ -12,6 +12,19 @@ const (
 )
 
 const (
+	voiceLowCutHz    = 120.0
+	voiceHighCutHz   = 3200.0
+	digitalLowCutHz  = 40.0
+	digitalHighCutHz = 3600.0
+	cwLowCutHz       = 300.0
+	cwHighCutHz      = 1200.0
+	amLowCutHz       = 40.0
+	amHighCutHz      = 5000.0
+	fmLowCutHz       = 80.0
+	fmHighCutHz      = 5000.0
+)
+
+const (
 	modeUSB uint32 = iota
 	modeLSB
 	modeCW
@@ -38,12 +51,25 @@ func modeCode(id string) uint32 {
 }
 
 type demodulator struct {
-	mode atomic.Uint32
+	mode     atomic.Uint32
+	lastMode uint32
+
+	ssbIDelay   *hilbertFilter
+	ssbQHilbert *hilbertFilter
+
+	voiceHP   *biquad
+	voiceLP   *biquad
+	digitalHP *biquad
+	digitalLP *biquad
+	cwHP      *biquad
+	cwLP      *biquad
+	amHP      *biquad
+	amLP      *biquad
+	fmHP      *biquad
+	fmLP      *biquad
 
 	amAverage float64
-	dcPrevIn  float64
-	dcPrevOut float64
-	agcLevel  float64
+	agc       *audioAGC
 	cwPhase   float64
 	fmPrevI   float64
 	fmPrevQ   float64
@@ -51,10 +77,27 @@ type demodulator struct {
 }
 
 func newDemodulator(modeID string) *demodulator {
+	code := modeCode(modeID)
 	d := &demodulator{
-		agcLevel: 0.05,
+		lastMode: code,
+
+		ssbIDelay:   newHilbertFilter(63),
+		ssbQHilbert: newHilbertFilter(63),
+
+		voiceHP:   newHighpass(voiceLowCutHz),
+		voiceLP:   newLowpass(voiceHighCutHz),
+		digitalHP: newHighpass(digitalLowCutHz),
+		digitalLP: newLowpass(digitalHighCutHz),
+		cwHP:      newHighpass(cwLowCutHz),
+		cwLP:      newLowpass(cwHighCutHz),
+		amHP:      newHighpass(amLowCutHz),
+		amLP:      newLowpass(amHighCutHz),
+		fmHP:      newHighpass(fmLowCutHz),
+		fmLP:      newLowpass(fmHighCutHz),
+
+		agc: newAudioAGC(),
 	}
-	d.mode.Store(modeCode(modeID))
+	d.mode.Store(code)
 	return d
 }
 
@@ -63,70 +106,247 @@ func (d *demodulator) SetMode(modeID string) {
 }
 
 func (d *demodulator) ProcessIQ(i, q float64) float32 {
+	mode := d.mode.Load()
+	if mode != d.lastMode {
+		d.resetForMode(mode)
+	}
+
 	var raw float64
 
-	switch d.mode.Load() {
+	switch mode {
 	case modeAM:
-		envelope := math.Hypot(i, q)
-		d.amAverage = 0.999*d.amAverage + 0.001*envelope
-		raw = envelope - d.amAverage
+		raw = d.processAM(i, q)
 	case modeFM:
-		if !d.fmHaveRef {
-			d.fmPrevI = i
-			d.fmPrevQ = q
-			d.fmHaveRef = true
-			return 0
-		}
-		raw = math.Atan2(i*d.fmPrevQ-q*d.fmPrevI, i*d.fmPrevI+q*d.fmPrevQ) * 4.0
+		raw = d.processFM(i, q)
+	case modeCW:
+		raw = d.processCW(i, q)
+	case modeLSB:
+		raw = d.processSSB(i, q, true)
+	case modeDIGU:
+		raw = d.processDigital(i, q)
+	default:
+		raw = d.processSSB(i, q, false)
+	}
+
+	return float32(d.agc.Process(raw))
+}
+
+func (d *demodulator) resetForMode(mode uint32) {
+	d.lastMode = mode
+	d.amAverage = 0
+	d.cwPhase = 0
+	d.fmPrevI = 0
+	d.fmPrevQ = 0
+	d.fmHaveRef = false
+
+	d.ssbIDelay.Reset()
+	d.ssbQHilbert.Reset()
+	d.voiceHP.Reset()
+	d.voiceLP.Reset()
+	d.digitalHP.Reset()
+	d.digitalLP.Reset()
+	d.cwHP.Reset()
+	d.cwLP.Reset()
+	d.amHP.Reset()
+	d.amLP.Reset()
+	d.fmHP.Reset()
+	d.fmLP.Reset()
+	d.agc.Reset()
+}
+
+func (d *demodulator) processSSB(i, q float64, lower bool) float64 {
+	iDelayed, _ := d.ssbIDelay.Process(i)
+	_, qHilbert := d.ssbQHilbert.Process(q)
+
+	audio := iDelayed - qHilbert
+	if lower {
+		audio = iDelayed + qHilbert
+	}
+	audio *= 0.5
+
+	audio = d.voiceHP.Process(audio)
+	audio = d.voiceLP.Process(audio)
+	return audio
+}
+
+func (d *demodulator) processDigital(i, q float64) float64 {
+	iDelayed, _ := d.ssbIDelay.Process(i)
+	_, qHilbert := d.ssbQHilbert.Process(q)
+	audio := (iDelayed - qHilbert) * 0.5
+	audio = d.digitalHP.Process(audio)
+	audio = d.digitalLP.Process(audio)
+	return audio
+}
+
+func (d *demodulator) processCW(i, q float64) float64 {
+	phaseStep := 2 * math.Pi * cwToneHz / audioSampleRate
+	cosine := math.Cos(d.cwPhase)
+	sine := math.Sin(d.cwPhase)
+	audio := i*cosine + q*sine
+	d.cwPhase += phaseStep
+	if d.cwPhase >= 2*math.Pi {
+		d.cwPhase -= 2 * math.Pi
+	}
+
+	audio = d.cwHP.Process(audio)
+	audio = d.cwLP.Process(audio)
+	return audio
+}
+
+func (d *demodulator) processAM(i, q float64) float64 {
+	envelope := math.Hypot(i, q)
+	if d.amAverage == 0 {
+		d.amAverage = envelope
+	}
+	d.amAverage = 0.9995*d.amAverage + 0.0005*envelope
+
+	audio := envelope - d.amAverage
+	audio = d.amHP.Process(audio)
+	audio = d.amLP.Process(audio)
+	return audio
+}
+
+func (d *demodulator) processFM(i, q float64) float64 {
+	if !d.fmHaveRef {
 		d.fmPrevI = i
 		d.fmPrevQ = q
-	case modeCW:
-		phaseStep := 2 * math.Pi * cwToneHz / audioSampleRate
-		cosine := math.Cos(d.cwPhase)
-		sine := math.Sin(d.cwPhase)
-		raw = i*cosine - q*sine
-		d.cwPhase += phaseStep
-		if d.cwPhase >= 2*math.Pi {
-			d.cwPhase -= 2 * math.Pi
-		}
-	case modeLSB:
-		raw = -i
+		d.fmHaveRef = true
+		return 0
+	}
+
+	audio := math.Atan2(i*d.fmPrevQ-q*d.fmPrevI, i*d.fmPrevI+q*d.fmPrevQ) * 6.0
+	d.fmPrevI = i
+	d.fmPrevQ = q
+	audio = d.fmHP.Process(audio)
+	audio = d.fmLP.Process(audio)
+	return audio
+}
+
+type biquad struct {
+	b0 float64
+	b1 float64
+	b2 float64
+	a1 float64
+	a2 float64
+	z1 float64
+	z2 float64
+}
+
+func newLowpass(cutoffHz float64) *biquad {
+	return newBiquad(cutoffHz, 1.0/math.Sqrt2, "lowpass")
+}
+
+func newHighpass(cutoffHz float64) *biquad {
+	return newBiquad(cutoffHz, 1.0/math.Sqrt2, "highpass")
+}
+
+func newBiquad(cutoffHz, q float64, kind string) *biquad {
+	if cutoffHz < 1 {
+		cutoffHz = 1
+	}
+	nyquist := float64(audioSampleRate) / 2
+	if cutoffHz > nyquist-1 {
+		cutoffHz = nyquist - 1
+	}
+
+	omega := 2 * math.Pi * cutoffHz / float64(audioSampleRate)
+	sine := math.Sin(omega)
+	cosine := math.Cos(omega)
+	alpha := sine / (2 * q)
+
+	var b0, b1, b2 float64
+	switch kind {
+	case "highpass":
+		b0 = (1 + cosine) / 2
+		b1 = -(1 + cosine)
+		b2 = (1 + cosine) / 2
 	default:
-		raw = i
+		b0 = (1 - cosine) / 2
+		b1 = 1 - cosine
+		b2 = (1 - cosine) / 2
 	}
 
-	// Simple DC blocker and slow AGC to keep the output intelligible.
-	y := raw - d.dcPrevIn + 0.995*d.dcPrevOut
-	d.dcPrevIn = raw
-	d.dcPrevOut = y
+	a0 := 1 + alpha
+	a1 := -2 * cosine
+	a2 := 1 - alpha
 
-	abs := math.Abs(y)
-	if abs > d.agcLevel {
-		d.agcLevel = 0.2*d.agcLevel + 0.8*abs
-	} else {
-		d.agcLevel = 0.999*d.agcLevel + 0.001*abs
+	return &biquad{
+		b0: b0 / a0,
+		b1: b1 / a0,
+		b2: b2 / a0,
+		a1: a1 / a0,
+		a2: a2 / a0,
+	}
+}
+
+func (b *biquad) Process(sample float64) float64 {
+	out := b.b0*sample + b.z1
+	b.z1 = b.b1*sample - b.a1*out + b.z2
+	b.z2 = b.b2*sample - b.a2*out
+	return out
+}
+
+func (b *biquad) Reset() {
+	b.z1 = 0
+	b.z2 = 0
+}
+
+type audioAGC struct {
+	envelope float64
+	gain     float64
+}
+
+func newAudioAGC() *audioAGC {
+	return &audioAGC{
+		envelope: 0.05,
+		gain:     4.0,
+	}
+}
+
+func (a *audioAGC) Reset() {
+	a.envelope = 0.05
+	a.gain = 4.0
+}
+
+func (a *audioAGC) Process(sample float64) float64 {
+	level := math.Abs(sample)
+
+	attack := 0.995
+	release := 0.99995
+	coeff := release
+	if level > a.envelope {
+		coeff = attack
+	}
+	a.envelope = coeff*a.envelope + (1-coeff)*level
+
+	desiredGain := 0.35 / math.Max(a.envelope, 0.01)
+	if desiredGain > 28 {
+		desiredGain = 28
+	} else if desiredGain < 0.2 {
+		desiredGain = 0.2
 	}
 
-	gain := 0.6 / math.Max(d.agcLevel, 0.02)
-	if gain > 24 {
-		gain = 24
+	gainCoeff := 0.9995
+	if desiredGain < a.gain {
+		gainCoeff = 0.995
 	}
+	a.gain = gainCoeff*a.gain + (1-gainCoeff)*desiredGain
 
-	out := y * gain
+	out := sample * a.gain
 	if out > 0.98 {
-		out = 0.98
-	} else if out < -0.98 {
-		out = -0.98
+		return 0.98
 	}
-
-	return float32(out)
+	if out < -0.98 {
+		return -0.98
+	}
+	return out
 }
 
 type modulator struct {
 	mode atomic.Uint32
 
 	hilbert *hilbertFilter
-	frames   chan []float32
+	frames  chan []float32
 
 	mu      sync.Mutex
 	pending []float32

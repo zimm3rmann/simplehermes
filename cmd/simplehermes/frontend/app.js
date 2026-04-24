@@ -10,16 +10,22 @@ const state = {
   wheelDeltaAccumulator: 0,
   wheelFlushTimer: null,
   audioContext: null,
+  appliedAudioOutputDeviceId: null,
   rxSocket: null,
   rxNode: null,
   rxBuffers: [],
   rxBufferOffset: 0,
+  rxPlaybackPrimed: false,
   txSocket: null,
   txNode: null,
   txMonitor: null,
   micStream: null,
   micSource: null,
   lastMicError: "",
+  audioDevices: {
+    inputs: [],
+    outputs: [],
+  },
   debugOpen: false,
   lastDebugFocusedElement: null,
   debugEvents: [],
@@ -30,11 +36,15 @@ const state = {
     txSocketState: "closed",
     rxFramesReceived: 0,
     rxSamplesReceived: 0,
+    rxSamplesBuffered: 0,
     rxPlaybackCallbacks: 0,
     rxUnderruns: 0,
     txFramesSent: 0,
     txSamplesSent: 0,
     micState: "not-requested",
+    audioInputDevice: "System default",
+    audioOutputDevice: "System default",
+    audioOutputRouting: "default",
     lastAudioError: "",
   },
   settingsOpen: false,
@@ -44,11 +54,13 @@ const state = {
 };
 
 const elements = {};
+const rxPrebufferSamples = 2048;
 
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   bindActions();
   refreshState();
+  loadAudioDevices();
   state.pollTimer = window.setInterval(refreshState, 1500);
 });
 
@@ -103,6 +115,10 @@ function bindElements() {
   elements.settingsMode = document.getElementById("settings-mode");
   elements.settingsListen = document.getElementById("settings-listen");
   elements.settingsRemote = document.getElementById("settings-remote");
+  elements.settingsRemoteAuth = document.getElementById("settings-remote-auth");
+  elements.settingsClearRemoteAuth = document.getElementById("settings-clear-remote-auth");
+  elements.settingsAudioInput = document.getElementById("settings-audio-input");
+  elements.settingsAudioOutput = document.getElementById("settings-audio-output");
   elements.settingsAccessibility = document.getElementById("settings-accessibility");
 }
 
@@ -224,7 +240,11 @@ function bindActions() {
       mode: elements.settingsMode.value,
       listenAddress: elements.settingsListen.value,
       remoteBaseUrl: elements.settingsRemote.value,
+      remoteAuthToken: elements.settingsRemoteAuth.value,
+      clearRemoteAuthToken: elements.settingsClearRemoteAuth.checked,
       accessibilityMode: elements.settingsAccessibility.checked,
+      audioInputDeviceId: elements.settingsAudioInput.value,
+      audioOutputDeviceId: elements.settingsAudioOutput.value,
     };
 
     const response = await fetch("/api/settings", {
@@ -234,6 +254,8 @@ function bindActions() {
     });
 
     const nextState = await response.json();
+    elements.settingsRemoteAuth.value = "";
+    elements.settingsClearRemoteAuth.checked = false;
     applyState(nextState);
     announce("Settings saved.");
   });
@@ -248,6 +270,11 @@ function bindActions() {
     }
   });
   window.addEventListener("beforeunload", shutdownAudio);
+  if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {
+    navigator.mediaDevices.addEventListener("devicechange", () => {
+      loadAudioDevices();
+    });
+  }
 }
 
 async function refreshState() {
@@ -299,6 +326,7 @@ async function sendCommandNow(payload, announcementBuilder, focusRequest) {
 }
 
 function applyState(nextState) {
+  const previousSettings = state.current?.settings || null;
   state.current = nextState;
   state.shortcuts = nextState.shortcuts || [];
   state.diagnostics = nextState.diagnostics || null;
@@ -309,6 +337,7 @@ function applyState(nextState) {
   renderSettings(nextState.settings);
   renderShortcuts(nextState.shortcuts);
   renderDebug();
+  syncAudioSettings(previousSettings, nextState.settings);
   syncAudioState(nextState.radio);
 }
 
@@ -503,8 +532,98 @@ function renderSettings(settings) {
   syncInputValue(elements.settingsMode, settings.mode);
   syncInputValue(elements.settingsListen, settings.listenAddress);
   syncInputValue(elements.settingsRemote, settings.remoteBaseUrl);
+  syncRemoteAuthField(settings);
+  renderAudioDeviceOptions(settings);
   syncCheckboxValue(elements.settingsAccessibility, settings.accessibilityMode);
   elements.liveStatus.setAttribute("aria-live", settings.accessibilityMode ? "polite" : "off");
+}
+
+function syncRemoteAuthField(settings) {
+  if (!state.settingsOpen && document.activeElement !== elements.settingsRemoteAuth) {
+    elements.settingsRemoteAuth.value = "";
+  }
+  elements.settingsRemoteAuth.placeholder = settings.remoteAuthConfigured
+    ? "Configured; leave blank to keep"
+    : "Optional shared access key";
+
+  if (!state.settingsOpen && document.activeElement !== elements.settingsClearRemoteAuth) {
+    elements.settingsClearRemoteAuth.checked = false;
+  }
+}
+
+async function loadAudioDevices() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== "function") {
+    state.audioDevices = { inputs: [], outputs: [] };
+    renderAudioDeviceOptions(state.current?.settings || null);
+    return;
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    state.audioDevices = {
+      inputs: devices.filter((device) => device.kind === "audioinput"),
+      outputs: devices.filter((device) => device.kind === "audiooutput"),
+    };
+    renderAudioDeviceOptions(state.current?.settings || null);
+    updateAudioDiagnostics();
+  } catch (error) {
+    logAudioError(error && error.message ? error.message : "Unable to list audio devices.");
+  }
+}
+
+function renderAudioDeviceOptions(settings) {
+  if (!elements.settingsAudioInput || !elements.settingsAudioOutput) return;
+
+  fillAudioDeviceSelect({
+    select: elements.settingsAudioInput,
+    devices: state.audioDevices.inputs,
+    selectedID: settings?.audioInputDeviceId || "",
+    defaultLabel: "System default microphone",
+    missingLabel: "Saved microphone",
+  });
+
+  fillAudioDeviceSelect({
+    select: elements.settingsAudioOutput,
+    devices: state.audioDevices.outputs,
+    selectedID: settings?.audioOutputDeviceId || "",
+    defaultLabel: "System default speaker",
+    missingLabel: "Saved speaker",
+  });
+}
+
+function fillAudioDeviceSelect({ select, devices, selectedID, defaultLabel, missingLabel }) {
+  const activeElement = document.activeElement;
+  const shouldPreserveFocus = activeElement === select;
+  const selected = selectedID || "";
+
+  select.innerHTML = "";
+  select.appendChild(audioDeviceOption("", defaultLabel));
+
+  let hasSelected = selected === "";
+  devices.forEach((device, index) => {
+    if (!device.deviceId) return;
+    const label = device.label || `${missingLabel.replace("Saved", "").trim() || "Audio device"} ${index + 1}`;
+    select.appendChild(audioDeviceOption(device.deviceId, label));
+    if (device.deviceId === selected) {
+      hasSelected = true;
+    }
+  });
+
+  if (!hasSelected) {
+    select.appendChild(audioDeviceOption(selected, `${missingLabel} (not found)`));
+  }
+
+  select.value = selected;
+  if (shouldPreserveFocus) {
+    select.focus();
+  }
+}
+
+function audioDeviceOption(value, label) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = label;
+  return option;
 }
 
 function renderShortcuts(shortcuts) {
@@ -786,6 +905,7 @@ function openSettings() {
   elements.main.setAttribute("aria-hidden", "true");
   elements.settingsModal.hidden = false;
   elements.openSettingsButton.setAttribute("aria-expanded", "true");
+  loadAudioDevices();
   const focusable = getSettingsFocusableElements();
   if (focusable.length) {
     focusable[0].focus();
@@ -1055,6 +1175,21 @@ function startAudioFromUserGesture() {
   announce(radio?.connected ? "Audio start requested." : "Audio engine ready. Connect a radio to start receive audio.");
 }
 
+function syncAudioSettings(previousSettings, nextSettings) {
+  if (!nextSettings) return;
+
+  if (previousSettings && previousSettings.audioInputDeviceId !== nextSettings.audioInputDeviceId) {
+    stopTXAudio();
+  }
+
+  if (previousSettings && previousSettings.audioOutputDeviceId !== nextSettings.audioOutputDeviceId) {
+    state.appliedAudioOutputDeviceId = null;
+  }
+
+  applyAudioOutputDevice(nextSettings.audioOutputDeviceId || "");
+  updateAudioDiagnostics();
+}
+
 function syncAudioState(radioState) {
   const shouldReceive = Boolean(radioState.connected && radioState.rxEnabled && radioState.capabilities.rxAudioReady);
   if (shouldReceive) {
@@ -1129,11 +1264,21 @@ function ensureRXPlayback() {
   };
   processor.connect(audioContext.destination);
   state.rxNode = processor;
+  applyAudioOutputDevice(state.current?.settings?.audioOutputDeviceId || "");
   updateAudioDiagnostics();
   logDebug("audio", "RX playback processor connected");
 }
 
 function fillOutputBuffer(target) {
+  if (!state.rxPlaybackPrimed) {
+    const buffered = bufferedRXSampleCount();
+    if (buffered < rxPrebufferSamples) {
+      target.fill(0);
+      return;
+    }
+    state.rxPlaybackPrimed = true;
+  }
+
   let written = 0;
 
   while (written < target.length) {
@@ -1141,6 +1286,7 @@ function fillOutputBuffer(target) {
     if (!current) {
       target.fill(0, written);
       state.frontendDiagnostics.rxUnderruns++;
+      state.rxPlaybackPrimed = false;
       return;
     }
 
@@ -1199,13 +1345,19 @@ async function ensureTXAudio() {
   }
 
   try {
+    const audioConstraints = {
+      channelCount: { ideal: 1 },
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    };
+    const inputDeviceID = state.current?.settings?.audioInputDeviceId || "";
+    if (inputDeviceID) {
+      audioConstraints.deviceId = { exact: inputDeviceID };
+    }
+
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      },
+      audio: audioConstraints,
     });
 
     const source = audioContext.createMediaStreamSource(stream);
@@ -1235,6 +1387,7 @@ async function ensureTXAudio() {
     state.txMonitor = silentMonitor;
     state.lastMicError = "";
     state.frontendDiagnostics.micState = "capturing";
+    loadAudioDevices();
     resumeAudioContext();
     updateAudioDiagnostics();
     logDebug("audio", "microphone capture connected");
@@ -1295,6 +1448,17 @@ function shutdownAudio() {
 function clearRXBuffers() {
   state.rxBuffers = [];
   state.rxBufferOffset = 0;
+  state.rxPlaybackPrimed = false;
+}
+
+function bufferedRXSampleCount() {
+  if (!state.rxBuffers.length) return 0;
+
+  let count = state.rxBuffers[0].length - state.rxBufferOffset;
+  for (let index = 1; index < state.rxBuffers.length; index++) {
+    count += state.rxBuffers[index].length;
+  }
+  return count;
 }
 
 function websocketURL(path) {
@@ -1309,16 +1473,58 @@ function floatsToArrayBuffer(input) {
   return buffer;
 }
 
+async function applyAudioOutputDevice(deviceID) {
+  if (!state.audioContext) return;
+
+  const selectedID = deviceID || "";
+  if (state.appliedAudioOutputDeviceId === selectedID) return;
+
+  if (typeof state.audioContext.setSinkId !== "function") {
+    state.appliedAudioOutputDeviceId = selectedID;
+    state.frontendDiagnostics.audioOutputRouting = "system default";
+    return;
+  }
+
+  try {
+    await state.audioContext.setSinkId(selectedID || "default");
+    state.appliedAudioOutputDeviceId = selectedID;
+    state.frontendDiagnostics.audioOutputRouting = selectedID ? "selected" : "system default";
+    updateAudioDiagnostics();
+    logDebug("audio", selectedID ? "speaker output device selected" : "speaker output set to system default");
+  } catch (error) {
+    state.appliedAudioOutputDeviceId = null;
+    state.frontendDiagnostics.audioOutputRouting = "failed";
+    logAudioError(error && error.message ? error.message : "Unable to select speaker output.");
+  }
+}
+
 function updateAudioDiagnostics() {
   state.frontendDiagnostics.audioContextState = state.audioContext ? state.audioContext.state : "not-created";
   state.frontendDiagnostics.rxSocketState = websocketState(state.rxSocket);
   state.frontendDiagnostics.txSocketState = websocketState(state.txSocket);
+  state.frontendDiagnostics.rxSamplesBuffered = bufferedRXSampleCount();
+  state.frontendDiagnostics.audioInputDevice = audioDeviceLabel(
+    state.audioDevices.inputs,
+    state.current?.settings?.audioInputDeviceId || "",
+    "System default"
+  );
+  state.frontendDiagnostics.audioOutputDevice = audioDeviceLabel(
+    state.audioDevices.outputs,
+    state.current?.settings?.audioOutputDeviceId || "",
+    "System default"
+  );
   if (state.micStream && state.micStream.active) {
     state.frontendDiagnostics.micState = "capturing";
   } else if (!state.micStream && state.frontendDiagnostics.micState === "capturing") {
     state.frontendDiagnostics.micState = "stopped";
   }
   renderDebug();
+}
+
+function audioDeviceLabel(devices, deviceID, defaultLabel) {
+  if (!deviceID) return defaultLabel;
+  const device = devices.find((candidate) => candidate.deviceId === deviceID);
+  return device?.label || "Selected device";
 }
 
 function websocketState(socket) {
@@ -1393,12 +1599,16 @@ function renderDebug() {
     ["TX socket", audio.txSocketState],
     ["RX frames received", audio.rxFramesReceived],
     ["RX samples received", audio.rxSamplesReceived],
+    ["RX samples buffered", audio.rxSamplesBuffered],
     ["Playback callbacks", audio.rxPlaybackCallbacks],
     ["Playback underruns", audio.rxUnderruns],
     ["Buffered RX chunks", state.rxBuffers.length],
     ["TX frames sent", audio.txFramesSent],
     ["TX samples sent", audio.txSamplesSent],
     ["Microphone", audio.micState],
+    ["Mic device", audio.audioInputDevice],
+    ["Speaker device", audio.audioOutputDevice],
+    ["Speaker routing", audio.audioOutputRouting],
     ["Last audio error", audio.lastAudioError || "none"],
   ]);
 
@@ -1626,6 +1836,7 @@ function ensureAudioContext() {
   } catch (error) {
     state.audioContext = new AudioContextCtor();
   }
+  applyAudioOutputDevice(state.current?.settings?.audioOutputDeviceId || "");
   updateAudioDiagnostics();
   return state.audioContext;
 }

@@ -17,17 +17,23 @@ const (
 )
 
 type Config struct {
-	Mode              Mode   `json:"mode"`
-	ListenAddress     string `json:"listenAddress"`
-	RemoteBaseURL     string `json:"remoteBaseUrl"`
-	AccessibilityMode bool   `json:"accessibilityMode"`
+	Mode                Mode   `json:"mode"`
+	ListenAddress       string `json:"listenAddress"`
+	RemoteBaseURL       string `json:"remoteBaseUrl"`
+	RemoteAuthToken     string `json:"remoteAuthToken,omitempty"`
+	AccessibilityMode   bool   `json:"accessibilityMode"`
+	AudioInputDeviceID  string `json:"audioInputDeviceId"`
+	AudioOutputDeviceID string `json:"audioOutputDeviceId"`
 }
 
 type Public struct {
-	Mode              Mode   `json:"mode"`
-	ListenAddress     string `json:"listenAddress"`
-	RemoteBaseURL     string `json:"remoteBaseUrl"`
-	AccessibilityMode bool   `json:"accessibilityMode"`
+	Mode                 Mode   `json:"mode"`
+	ListenAddress        string `json:"listenAddress"`
+	RemoteBaseURL        string `json:"remoteBaseUrl"`
+	RemoteAuthConfigured bool   `json:"remoteAuthConfigured"`
+	AccessibilityMode    bool   `json:"accessibilityMode"`
+	AudioInputDeviceID   string `json:"audioInputDeviceId"`
+	AudioOutputDeviceID  string `json:"audioOutputDeviceId"`
 }
 
 func Default() Config {
@@ -99,14 +105,21 @@ func (c *Config) Normalize() {
 		c.RemoteBaseURL = Default().RemoteBaseURL
 	}
 	c.RemoteBaseURL = strings.TrimRight(c.RemoteBaseURL, "/")
+
+	c.RemoteAuthToken = strings.TrimSpace(c.RemoteAuthToken)
+	c.AudioInputDeviceID = strings.TrimSpace(c.AudioInputDeviceID)
+	c.AudioOutputDeviceID = strings.TrimSpace(c.AudioOutputDeviceID)
 }
 
 func (c Config) Public() Public {
 	c.Normalize()
 	return Public{
-		Mode:              c.Mode,
-		ListenAddress:     c.ListenAddress,
-		RemoteBaseURL:     c.RemoteBaseURL,
-		AccessibilityMode: c.AccessibilityMode,
+		Mode:                 c.Mode,
+		ListenAddress:        c.ListenAddress,
+		RemoteBaseURL:        c.RemoteBaseURL,
+		RemoteAuthConfigured: c.RemoteAuthToken != "",
+		AccessibilityMode:    c.AccessibilityMode,
+		AudioInputDeviceID:   c.AudioInputDeviceID,
+		AudioOutputDeviceID:  c.AudioOutputDeviceID,
 	}
 }
