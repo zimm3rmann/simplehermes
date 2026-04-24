@@ -3,6 +3,7 @@ const state = {
   shortcuts: [],
   pollTimer: null,
   commandChain: Promise.resolve(),
+  apiBaseUrl: "",
   pendingFocus: null,
   spacePTTActive: false,
   lastAnnouncementText: "",
@@ -32,6 +33,7 @@ const state = {
   diagnostics: null,
   frontendDiagnostics: {
     audioContextState: "not-created",
+    apiEndpoint: "embedded",
     rxSocketState: "closed",
     txSocketState: "closed",
     rxFramesReceived: 0,
@@ -59,6 +61,7 @@ const rxPrebufferSamples = 2048;
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   bindActions();
+  loadDesktopInfo().finally(refreshState);
   refreshState();
   loadAudioDevices();
   state.pollTimer = window.setInterval(refreshState, 1500);
@@ -274,6 +277,22 @@ function bindActions() {
     navigator.mediaDevices.addEventListener("devicechange", () => {
       loadAudioDevices();
     });
+  }
+}
+
+async function loadDesktopInfo() {
+  try {
+    const response = await fetch("/api/desktop", { headers: { Accept: "application/json" } });
+    if (!response.ok) return;
+
+    const info = await response.json();
+    if (!info || typeof info.apiBaseUrl !== "string" || !info.apiBaseUrl.trim()) return;
+
+    state.apiBaseUrl = info.apiBaseUrl.trim().replace(/\/+$/, "");
+    state.frontendDiagnostics.apiEndpoint = state.apiBaseUrl;
+    logDebug("state", `desktop API ${state.apiBaseUrl}`);
+  } catch (error) {
+    state.frontendDiagnostics.apiEndpoint = "embedded";
   }
 }
 
@@ -1462,8 +1481,18 @@ function bufferedRXSampleCount() {
 }
 
 function websocketURL(path) {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}${path}`;
+  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+  const fallbackBase = `${protocol}//${window.location.host}`;
+  const base = state.apiBaseUrl || fallbackBase;
+
+  try {
+    const url = new URL(path, base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
+  } catch (error) {
+    const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
+    return `${wsProtocol}//${window.location.host}${path}`;
+  }
 }
 
 function floatsToArrayBuffer(input) {
@@ -1510,6 +1539,7 @@ async function applyAudioOutputDevice(deviceID) {
 
 function updateAudioDiagnostics() {
   state.frontendDiagnostics.audioContextState = state.audioContext ? state.audioContext.state : "not-created";
+  state.frontendDiagnostics.apiEndpoint = state.apiBaseUrl || "embedded";
   state.frontendDiagnostics.rxSocketState = websocketState(state.rxSocket);
   state.frontendDiagnostics.txSocketState = websocketState(state.txSocket);
   state.frontendDiagnostics.rxSamplesBuffered = bufferedRXSampleCount();
@@ -1604,6 +1634,7 @@ function renderDebug() {
 
   const audio = state.frontendDiagnostics;
   renderMetrics(elements.debugAudio, [
+    ["API endpoint", audio.apiEndpoint],
     ["Audio context", audio.audioContextState],
     ["RX socket", audio.rxSocketState],
     ["TX socket", audio.txSocketState],

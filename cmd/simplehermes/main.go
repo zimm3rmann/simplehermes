@@ -63,7 +63,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 246, G: 241, B: 233, A: 255},
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
-			Handler: apiServer.Handler(),
+			Handler: desktopApp.Handler(),
 		},
 		OnStartup:                desktopApp.Startup,
 		OnShutdown:               desktopApp.Shutdown,

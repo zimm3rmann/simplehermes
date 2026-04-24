@@ -3,7 +3,9 @@ package desktop
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,8 +18,10 @@ type App struct {
 	cfg        config.Config
 	apiHandler http.Handler
 
-	mu             sync.Mutex
-	externalServer *http.Server
+	mu              sync.Mutex
+	localServer     *http.Server
+	localAPIBaseURL string
+	externalServer  *http.Server
 }
 
 func New(cfg config.Config, apiHandler http.Handler) *App {
@@ -28,28 +32,98 @@ func New(cfg config.Config, apiHandler http.Handler) *App {
 	}
 }
 
+type desktopInfo struct {
+	APIBaseURL string `json:"apiBaseUrl"`
+}
+
+func (a *App) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/desktop", a.handleDesktopInfo)
+	mux.Handle("/", a.apiHandler)
+	return mux
+}
+
 func (a *App) Startup(ctx context.Context) {
-	if a.cfg.Mode != config.ModeServer {
-		return
+	if err := a.startLocalServer(); err != nil {
+		log.Printf("local desktop api server: %v", err)
 	}
 
-	go a.startExternalServer()
+	if a.cfg.Mode == config.ModeServer {
+		go a.startExternalServer()
+	}
 }
 
 func (a *App) Shutdown(ctx context.Context) {
 	a.mu.Lock()
-	server := a.externalServer
+	localServer := a.localServer
+	externalServer := a.externalServer
+	a.localServer = nil
+	a.externalServer = nil
+	a.localAPIBaseURL = ""
 	a.mu.Unlock()
 
+	shutdownServer("local desktop api", localServer)
+	shutdownServer("external api", externalServer)
+}
+
+func (a *App) handleDesktopInfo(w http.ResponseWriter, _ *http.Request) {
+	a.mu.Lock()
+	info := desktopInfo{APIBaseURL: a.localAPIBaseURL}
+	a.mu.Unlock()
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(info)
+}
+
+func (a *App) startLocalServer() error {
+	a.mu.Lock()
+	if a.localServer != nil {
+		a.mu.Unlock()
+		return nil
+	}
+	a.mu.Unlock()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+
+	baseURL := "http://" + listener.Addr().String()
+	server := &http.Server{
+		Handler:           a.apiHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	a.mu.Lock()
+	if a.localServer != nil {
+		a.mu.Unlock()
+		_ = listener.Close()
+		return nil
+	}
+	a.localServer = server
+	a.localAPIBaseURL = baseURL
+	a.mu.Unlock()
+
+	go func() {
+		log.Printf("SimpleHermes desktop API listening on %s", baseURL)
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("local desktop api server: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func shutdownServer(name string, server *http.Server) {
 	if server == nil {
 		return
 	}
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("external api shutdown: %v", err)
+		log.Printf("%s shutdown: %v", name, err)
 	}
 }
 
