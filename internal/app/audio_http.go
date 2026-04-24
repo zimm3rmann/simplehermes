@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+const audioWebsocketWriteTimeout = 2 * time.Second
 
 var audioUpgrader = websocket.Upgrader{
 	CheckOrigin: func(_ *http.Request) bool { return true },
@@ -31,6 +34,7 @@ func (s *LocalService) HandleRXAudio(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	go cancelOnWebsocketRead(ctx, cancel, conn)
 
 	stream, err := session.SubscribeRXAudio(ctx)
 	if err != nil {
@@ -46,7 +50,8 @@ func (s *LocalService) HandleRXAudio(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			if err := conn.WriteMessage(websocket.BinaryMessage, floatsToBytes(frame)); err != nil {
+			if err := writeAudioMessage(conn, websocket.BinaryMessage, floatsToBytes(frame)); err != nil {
+				cancel()
 				return
 			}
 		}
@@ -140,6 +145,23 @@ func pipeWebsocket(src, dst *websocket.Conn) error {
 			return err
 		}
 	}
+}
+
+func cancelOnWebsocketRead(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn) {
+	defer cancel()
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		if _, _, err := conn.NextReader(); err != nil {
+			return
+		}
+	}
+}
+
+func writeAudioMessage(conn *websocket.Conn, messageType int, payload []byte) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(audioWebsocketWriteTimeout))
+	return conn.WriteMessage(messageType, payload)
 }
 
 func websocketURL(base, path string) (string, error) {

@@ -3,6 +3,7 @@ package hpsdr
 import (
 	"context"
 	"testing"
+	"time"
 
 	"simplehermes/internal/radio"
 )
@@ -50,6 +51,37 @@ func TestProtocol1WriteTXAudioRejectsDisconnectedSession(t *testing.T) {
 
 	if err := session.WriteTXAudio(context.Background(), []float32{0.5}); err == nil {
 		t.Fatalf("expected disconnected WriteTXAudio to fail")
+	}
+}
+
+func TestProtocol1SubscribeRXAudioRemovesSubscriberOnContextCancel(t *testing.T) {
+	session := &protocol1Session{
+		subscribers: make(map[chan []float32]struct{}),
+		snapshot:    radio.Snapshot{Connected: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := session.SubscribeRXAudio(ctx)
+	if err != nil {
+		t.Fatalf("SubscribeRXAudio returned error: %v", err)
+	}
+
+	if got := session.Diagnostics().RXSubscribers; got != 1 {
+		t.Fatalf("subscribers = %d, want 1", got)
+	}
+
+	cancel()
+	select {
+	case _, ok := <-stream:
+		if ok {
+			t.Fatalf("expected subscriber channel to close")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("subscriber channel did not close")
+	}
+
+	if got := session.Diagnostics().RXSubscribers; got != 0 {
+		t.Fatalf("subscribers after cancel = %d, want 0", got)
 	}
 }
 

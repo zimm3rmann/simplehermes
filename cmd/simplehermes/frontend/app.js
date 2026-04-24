@@ -4,6 +4,7 @@ const state = {
   pollTimer: null,
   commandChain: Promise.resolve(),
   apiBaseUrl: "",
+  apiDiscoveryComplete: false,
   pendingFocus: null,
   spacePTTActive: false,
   lastAnnouncementText: "",
@@ -13,11 +14,13 @@ const state = {
   audioContext: null,
   appliedAudioOutputDeviceId: null,
   rxSocket: null,
+  rxSocketUrl: "",
   rxNode: null,
   rxBuffers: [],
   rxBufferOffset: 0,
   rxPlaybackPrimed: false,
   txSocket: null,
+  txSocketUrl: "",
   txNode: null,
   txMonitor: null,
   micStream: null,
@@ -61,11 +64,16 @@ const rxPrebufferSamples = 2048;
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   bindActions();
-  loadDesktopInfo().finally(refreshState);
-  refreshState();
+  initializeApp();
   loadAudioDevices();
-  state.pollTimer = window.setInterval(refreshState, 1500);
 });
+
+async function initializeApp() {
+  await loadDesktopInfo();
+  state.apiDiscoveryComplete = true;
+  refreshState();
+  state.pollTimer = window.setInterval(refreshState, 1500);
+}
 
 function bindElements() {
   elements.main = document.getElementById("main");
@@ -1182,7 +1190,7 @@ function startAudioFromUserGesture() {
 
   resumeAudioContext();
   const radio = state.current?.radio;
-  if (radio?.connected) {
+  if (radio?.connected && state.apiDiscoveryComplete) {
     ensureRXAudio();
     if (radio.txEnabled) {
       ensureTXAudio();
@@ -1212,26 +1220,43 @@ function syncAudioSettings(previousSettings, nextSettings) {
 function syncAudioState(radioState) {
   const shouldReceive = Boolean(radioState.connected && radioState.rxEnabled && radioState.capabilities.rxAudioReady);
   if (shouldReceive) {
-    ensureRXAudio();
+    if (state.apiDiscoveryComplete) {
+      ensureRXAudio();
+    }
   } else {
     stopRXAudio();
   }
 
   const shouldCapture = Boolean(radioState.connected && radioState.txEnabled && radioState.capabilities.txAudioReady);
   if (shouldCapture) {
-    ensureTXAudio();
+    if (state.apiDiscoveryComplete) {
+      ensureTXAudio();
+    }
   } else {
     stopTXAudio();
   }
 }
 
 function ensureRXAudio() {
+  const socketUrl = websocketURL("/api/audio/rx");
   if (state.rxSocket && (state.rxSocket.readyState === WebSocket.OPEN || state.rxSocket.readyState === WebSocket.CONNECTING)) {
+    if (state.rxSocketUrl !== socketUrl) {
+      state.rxSocket.close();
+      state.rxSocket = null;
+      state.rxSocketUrl = "";
+      clearRXBuffers();
+    } else {
+      ensureRXPlayback();
+      return;
+    }
+  }
+
+  if (state.rxSocket && state.rxSocket.readyState === WebSocket.CLOSING) {
     ensureRXPlayback();
     return;
   }
 
-  const socket = new WebSocket(websocketURL("/api/audio/rx"));
+  const socket = new WebSocket(socketUrl);
   logDebug("audio", "opening RX audio websocket");
   socket.binaryType = "arraybuffer";
   socket.addEventListener("open", () => {
@@ -1252,6 +1277,7 @@ function ensureRXAudio() {
     if (state.rxSocket === socket) {
       logDebug("audio", "RX audio websocket closed");
       state.rxSocket = null;
+      state.rxSocketUrl = "";
       clearRXBuffers();
       updateAudioDiagnostics();
     }
@@ -1260,11 +1286,14 @@ function ensureRXAudio() {
     logAudioError("RX audio websocket error");
     if (state.rxSocket === socket) {
       state.rxSocket = null;
+      state.rxSocketUrl = "";
     }
+    socket.close();
     updateAudioDiagnostics();
   });
 
   state.rxSocket = socket;
+  state.rxSocketUrl = socketUrl;
 }
 
 function ensureRXPlayback() {
@@ -1323,6 +1352,13 @@ function fillOutputBuffer(target) {
 }
 
 async function ensureTXAudio() {
+  const socketUrl = websocketURL("/api/audio/tx");
+  if (state.txSocket && (state.txSocket.readyState === WebSocket.OPEN || state.txSocket.readyState === WebSocket.CONNECTING) && state.txSocketUrl !== socketUrl) {
+    state.txSocket.close();
+    state.txSocket = null;
+    state.txSocketUrl = "";
+  }
+
   if (state.txSocket && (state.txSocket.readyState === WebSocket.OPEN || state.txSocket.readyState === WebSocket.CONNECTING) && state.txNode) {
     return;
   }
@@ -1334,7 +1370,7 @@ async function ensureTXAudio() {
   }
 
   if (!state.txSocket || state.txSocket.readyState > WebSocket.OPEN) {
-    const socket = new WebSocket(websocketURL("/api/audio/tx"));
+    const socket = new WebSocket(socketUrl);
     logDebug("audio", "opening TX audio websocket");
     socket.binaryType = "arraybuffer";
     socket.addEventListener("open", () => {
@@ -1345,6 +1381,7 @@ async function ensureTXAudio() {
       if (state.txSocket === socket) {
         logDebug("audio", "TX audio websocket closed");
         state.txSocket = null;
+        state.txSocketUrl = "";
         updateAudioDiagnostics();
       }
     });
@@ -1352,10 +1389,13 @@ async function ensureTXAudio() {
       logAudioError("TX audio websocket error");
       if (state.txSocket === socket) {
         state.txSocket = null;
+        state.txSocketUrl = "";
       }
+      socket.close();
       updateAudioDiagnostics();
     });
     state.txSocket = socket;
+    state.txSocketUrl = socketUrl;
   }
 
   if (state.micStream && state.txNode) {
@@ -1426,6 +1466,7 @@ function stopRXAudio() {
     state.rxSocket.close();
     state.rxSocket = null;
   }
+  state.rxSocketUrl = "";
   if (state.rxNode) {
     state.rxNode.disconnect();
     state.rxNode = null;
@@ -1439,6 +1480,7 @@ function stopTXAudio() {
     state.txSocket.close();
     state.txSocket = null;
   }
+  state.txSocketUrl = "";
   if (state.txNode) {
     state.txNode.disconnect();
     state.txNode = null;
