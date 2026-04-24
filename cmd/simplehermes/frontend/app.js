@@ -1479,20 +1479,30 @@ async function applyAudioOutputDevice(deviceID) {
   const selectedID = deviceID || "";
   if (state.appliedAudioOutputDeviceId === selectedID) return;
 
+  if (!selectedID) {
+    state.appliedAudioOutputDeviceId = "";
+    state.frontendDiagnostics.audioOutputRouting = "system default";
+    if (state.frontendDiagnostics.lastAudioError.includes("setSinkId")) {
+      state.frontendDiagnostics.lastAudioError = "";
+    }
+    updateAudioDiagnostics();
+    return;
+  }
+
   if (typeof state.audioContext.setSinkId !== "function") {
     state.appliedAudioOutputDeviceId = selectedID;
-    state.frontendDiagnostics.audioOutputRouting = "system default";
+    state.frontendDiagnostics.audioOutputRouting = "unsupported";
     return;
   }
 
   try {
-    await state.audioContext.setSinkId(selectedID || "default");
+    await state.audioContext.setSinkId(selectedID);
     state.appliedAudioOutputDeviceId = selectedID;
-    state.frontendDiagnostics.audioOutputRouting = selectedID ? "selected" : "system default";
+    state.frontendDiagnostics.audioOutputRouting = "selected";
     updateAudioDiagnostics();
-    logDebug("audio", selectedID ? "speaker output device selected" : "speaker output set to system default");
+    logDebug("audio", "speaker output device selected");
   } catch (error) {
-    state.appliedAudioOutputDeviceId = null;
+    state.appliedAudioOutputDeviceId = selectedID;
     state.frontendDiagnostics.audioOutputRouting = "failed";
     logAudioError(error && error.message ? error.message : "Unable to select speaker output.");
   }

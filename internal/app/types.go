@@ -135,13 +135,17 @@ func defaultRadioModel() radioModel {
 		ptt:          false,
 		status:       "Select a device and connect.",
 		lastAction:   "Idle",
-		capabilities: radio.Capabilities{
-			DiscoveryReady: true,
-			HardwareReady:  false,
-			RXAudioReady:   false,
-			TXAudioReady:   false,
-			Summary:        "Discovery is available. Connect to a Hermes protocol 1 device to start live hardware transport and audio streaming.",
-		},
+		capabilities: disconnectedCapabilities(),
+	}
+}
+
+func disconnectedCapabilities() radio.Capabilities {
+	return radio.Capabilities{
+		DiscoveryReady: true,
+		HardwareReady:  false,
+		RXAudioReady:   false,
+		TXAudioReady:   false,
+		Summary:        "Discovery is available. Connect to a Hermes protocol 1 device to start live hardware transport and audio streaming.",
 	}
 }
 

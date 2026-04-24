@@ -105,6 +105,7 @@ func (s *LocalService) Dispatch(ctx context.Context, cmd Command) (ViewState, er
 		s.radio.connected = false
 		s.radio.device = nil
 		s.radio.ptt = false
+		s.radio.capabilities = disconnectedCapabilities()
 		s.radio.status = "Disconnected from device."
 		s.radio.lastAction = "Disconnected"
 	case "setBand":
