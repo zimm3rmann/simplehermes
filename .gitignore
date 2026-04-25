@@ -3,6 +3,7 @@
 /build/
 /simplehermes
 /simplehermes.exe
+/.tools/
 
 # Local reference material
 /source_repos/

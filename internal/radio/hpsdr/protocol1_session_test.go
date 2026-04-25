@@ -85,6 +85,38 @@ func TestProtocol1SubscribeRXAudioRemovesSubscriberOnContextCancel(t *testing.T)
 	}
 }
 
+func TestProtocol1SessionContextOutlivesConnectRequest(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	sessionCtx, cancelSession, err := newSessionContext(parent)
+	if err != nil {
+		t.Fatalf("newSessionContext returned error: %v", err)
+	}
+	defer cancelSession()
+
+	cancelParent()
+	select {
+	case <-sessionCtx.Done():
+		t.Fatalf("session context was canceled by request context")
+	default:
+	}
+
+	cancelSession()
+	select {
+	case <-sessionCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatalf("session context was not canceled by session cancel")
+	}
+}
+
+func TestProtocol1SessionContextHonorsAlreadyCanceledParent(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+
+	if _, _, err := newSessionContext(parent); err == nil {
+		t.Fatalf("expected canceled parent to prevent session creation")
+	}
+}
+
 func TestProtocol1ProcessEP6FrameDecodesReceiverIQAndSkipsMicBytes(t *testing.T) {
 	session := &protocol1Session{
 		demod: newDemodulator("am"),

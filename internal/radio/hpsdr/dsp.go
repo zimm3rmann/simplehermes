@@ -12,6 +12,14 @@ const (
 )
 
 const (
+	agcTargetLevel = 0.25
+	agcMinEnvelope = 0.00004
+	agcLowLevelMax = 0.001
+	agcVoiceMaxGain = 4.0
+	agcMaxGain     = 6000.0
+)
+
+const (
 	voiceLowCutHz    = 120.0
 	voiceHighCutHz   = 3200.0
 	digitalLowCutHz  = 40.0
@@ -128,7 +136,8 @@ func (d *demodulator) ProcessIQ(i, q float64) float32 {
 		raw = d.processSSB(i, q, false)
 	}
 
-	return float32(d.agc.Process(raw))
+	referenceLevel := math.Max(math.Abs(raw), math.Hypot(i, q)*0.02)
+	return float32(d.agc.Process(raw, referenceLevel))
 }
 
 func (d *demodulator) resetForMode(mode uint32) {
@@ -298,19 +307,17 @@ type audioAGC struct {
 
 func newAudioAGC() *audioAGC {
 	return &audioAGC{
-		envelope: 0.05,
-		gain:     4.0,
+		envelope: agcMinEnvelope,
+		gain:     100.0,
 	}
 }
 
 func (a *audioAGC) Reset() {
-	a.envelope = 0.05
-	a.gain = 4.0
+	a.envelope = agcMinEnvelope
+	a.gain = 100.0
 }
 
-func (a *audioAGC) Process(sample float64) float64 {
-	level := math.Abs(sample)
-
+func (a *audioAGC) Process(sample, level float64) float64 {
 	attack := 0.995
 	release := 0.99995
 	coeff := release
@@ -319,9 +326,13 @@ func (a *audioAGC) Process(sample float64) float64 {
 	}
 	a.envelope = coeff*a.envelope + (1-coeff)*level
 
-	desiredGain := 0.35 / math.Max(a.envelope, 0.01)
-	if desiredGain > 28 {
-		desiredGain = 28
+	desiredGain := agcTargetLevel / math.Max(a.envelope, agcMinEnvelope)
+	maxGain := agcMaxGain
+	if a.envelope > agcLowLevelMax {
+		maxGain = agcVoiceMaxGain
+	}
+	if desiredGain > maxGain {
+		desiredGain = maxGain
 	} else if desiredGain < 0.2 {
 		desiredGain = 0.2
 	}

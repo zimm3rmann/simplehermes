@@ -49,7 +49,18 @@ func TestDemodulatorOutputIsBounded(t *testing.T) {
 	}
 }
 
+func TestDemodulatorRaisesWeakSignalsIntoAudibleRange(t *testing.T) {
+	rms := demodToneRMSAmplitude("usb", 1000, 0.00001, false)
+	if rms < 0.01 {
+		t.Fatalf("weak USB tone RMS too low after AGC: %.6f", rms)
+	}
+}
+
 func demodToneRMS(modeID string, frequencyHz float64, invertQ bool) float64 {
+	return demodToneRMSAmplitude(modeID, frequencyHz, 0.35, invertQ)
+}
+
+func demodToneRMSAmplitude(modeID string, frequencyHz, amplitude float64, invertQ bool) float64 {
 	d := newDemodulator(modeID)
 	const total = 7000
 	const skip = 1800
@@ -58,8 +69,8 @@ func demodToneRMS(modeID string, frequencyHz float64, invertQ bool) float64 {
 	var count int
 	for n := 0; n < total; n++ {
 		phase := 2 * math.Pi * frequencyHz * float64(n) / audioSampleRate
-		i := math.Cos(phase) * 0.35
-		q := math.Sin(phase) * 0.35
+		i := math.Cos(phase) * amplitude
+		q := math.Sin(phase) * amplitude
 		if invertQ {
 			q = -q
 		}

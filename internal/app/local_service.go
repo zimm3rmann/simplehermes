@@ -46,8 +46,9 @@ func NewLocalService(version string, cfg config.Config, configPath string, drive
 }
 
 func (s *LocalService) State(_ context.Context) (ViewState, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applySessionSnapshotLocked()
 	return s.snapshotLocked(), nil
 }
 

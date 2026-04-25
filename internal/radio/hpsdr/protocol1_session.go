@@ -51,20 +51,26 @@ type protocol1Session struct {
 }
 
 func newProtocol1Session(parent context.Context, device radio.Device, options radio.SessionOptions) (radio.Session, error) {
+	ctx, cancel, err := newSessionContext(parent)
+	if err != nil {
+		return nil, err
+	}
+
 	localIP, err := interfaceIPv4(device.InterfaceName)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: localIP, Port: 0})
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("open radio socket: %w", err)
 	}
 
 	_ = conn.SetReadBuffer(1 << 20)
 	_ = conn.SetWriteBuffer(1 << 20)
 
-	ctx, cancel := context.WithCancel(parent)
 	session := &protocol1Session{
 		ctx:         ctx,
 		cancel:      cancel,
@@ -118,6 +124,14 @@ func newProtocol1Session(parent context.Context, device radio.Device, options ra
 	go session.sendLoop()
 
 	return session, nil
+}
+
+func newSessionContext(parent context.Context) (context.Context, context.CancelFunc, error) {
+	if err := parent.Err(); err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return ctx, cancel, nil
 }
 
 func (s *protocol1Session) Snapshot() radio.Snapshot {

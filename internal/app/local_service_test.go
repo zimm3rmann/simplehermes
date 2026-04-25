@@ -60,6 +60,51 @@ func TestLocalServiceDisconnectClearsHardwareCapabilities(t *testing.T) {
 	}
 }
 
+func TestLocalServiceStateRefreshesLiveSessionSnapshot(t *testing.T) {
+	device := radio.Device{
+		ID:            "radio-1",
+		Model:         "Hermes Lite 2",
+		Address:       "192.0.2.15",
+		InterfaceName: "eth0",
+		Protocol:      "protocol1",
+	}
+	session := &localTestSession{
+		snapshot: radio.Snapshot{
+			Connected: true,
+			Device:    &device,
+			BandID:    "20m",
+			ModeID:    "usb",
+			RXEnabled: true,
+			Status:    "Connecting",
+			Capabilities: radio.Capabilities{
+				DiscoveryReady: true,
+			},
+		},
+	}
+	service := NewLocalService("test", config.Default(), filepath.Join(t.TempDir(), "config.json"), localTestDriver{session: session})
+	service.devices = []radio.Device{device}
+
+	if _, err := service.Dispatch(context.Background(), Command{Type: "connect", DeviceID: device.ID}); err != nil {
+		t.Fatalf("connect returned error: %v", err)
+	}
+
+	session.snapshot.Status = "Streaming"
+	session.snapshot.Capabilities.HardwareReady = true
+	session.snapshot.Capabilities.RXAudioReady = true
+	session.snapshot.Capabilities.TXAudioReady = true
+
+	state, err := service.State(context.Background())
+	if err != nil {
+		t.Fatalf("State returned error: %v", err)
+	}
+	if state.Radio.Status != "Streaming" {
+		t.Fatalf("State did not refresh radio status: %q", state.Radio.Status)
+	}
+	if !state.Radio.Capabilities.RXAudioReady {
+		t.Fatalf("State did not refresh RX audio capability: %#v", state.Radio.Capabilities)
+	}
+}
+
 type localTestDriver struct {
 	session radio.Session
 }
